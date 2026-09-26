@@ -5,10 +5,14 @@
  * and does it.
  *
  * A scan runs at start and every half hour, and on demand from the window.
- * Its result is kept in `cache/scan.json`, with the sessions it judged by in
- * `cache/sessions.json`, so `bin/disk-scan` — what the skill runs — answers
- * at once and judges sessions the same way. The Windows folder sizes take
- * minutes to read, so they are read only when the window asks.
+ * Its result is kept in `cache/scan.json`, with the sessions it judged by, so
+ * `bin/disk-scan` — what the skill runs — answers at once and judges sessions
+ * the same way; a scan it writes is taken up here too. The Windows folder
+ * sizes take minutes to read, so they are read only when the window asks.
+ *
+ * The window's Clean up buttons start a session each, in a window of its own
+ * (prifly's `prifly-launch`), through `launch` with the candidate's id or a
+ * group as the key; when such a session ends the drives are scanned again.
  */
 
 import { homedir } from "node:os";
@@ -17,11 +21,14 @@ import { readCache, writeCache } from "./scan/cache";
 import { readConfig } from "./scan/config";
 import { windowsFolders } from "./scan/folders";
 import { summary } from "./scan/format";
+import { cleanupPrompt } from "./scan/prompt";
 import { scan } from "./scan/scan";
-import { readArchived, withArchived } from "./scan/sessions";
+import { isLive, readArchived, withArchived } from "./scan/sessions";
 import type { Scan, Usage } from "./scan/types";
 
 const EVERY = 30 * 60_000;
+/** How often the cleanup sessions this started are looked at, to rescan when one ends. */
+const CLEANUPS_EVERY = 60_000;
 
 type State = {
   api: ExtensionApi;
@@ -30,6 +37,8 @@ type State = {
   windows: { at: number; usage: Usage[] } | null;
   deep: Promise<void> | null;
   error: string;
+  /** The cleanup sessions started from here that were still running when last looked at. */
+  cleanups: Set<string>;
 };
 
 let state: State | null = null;
@@ -98,6 +107,22 @@ export function chips(result: Scan): Decoration[] {
   ];
 }
 
+/** A cleanup session that has ended is what the drives look like now: scan again. */
+function watchCleanups(current: State): void {
+  if (current.cleanups.size === 0) return;
+  const nobody = { ids: new Set<string>(), folders: [] };
+  const live = new Set(
+    sessions(current.api)
+      .filter((session) => isLive(session, nobody))
+      .map((session) => session.id),
+  );
+  const ended = [...current.cleanups].filter((id) => !live.has(id));
+  if (ended.length === 0) return;
+  for (const id of ended) current.cleanups.delete(id);
+  current.api.log("cleanup_ended", { sessions: ended.length });
+  void rescan(current).catch(() => undefined);
+}
+
 export function activate(api: ExtensionApi): () => void {
   const cached = readCache(api.folder);
   const current: State = {
@@ -107,19 +132,31 @@ export function activate(api: ExtensionApi): () => void {
     windows: cached?.windows ?? null,
     deep: null,
     error: "",
+    cleanups: new Set(),
   };
   state = current;
   if (current.last !== null) api.show({}, chips(current.last));
   const soon = setTimeout(() => void rescan(current).catch(() => undefined), 10_000);
   const timer = setInterval(() => void rescan(current).catch(() => undefined), EVERY);
+  const watcher = setInterval(() => watchCleanups(current), CLEANUPS_EVERY);
   return () => {
     clearTimeout(soon);
     clearInterval(timer);
+    clearInterval(watcher);
     state = null;
   };
 }
 
+/** A scan `bin/disk-scan --fresh` wrote since, from a cleanup session, is the one to show. */
+function adoptNewer(current: State): void {
+  const cached = readCache(current.api.folder);
+  if (cached === null || (current.last !== null && cached.scan.at <= current.last.at)) return;
+  current.last = cached.scan;
+  current.api.show({}, chips(cached.scan));
+}
+
 function status(current: State) {
+  adoptNewer(current);
   return {
     scan: current.last,
     scanning: current.running !== null,
@@ -157,13 +194,22 @@ export function choices(): LaunchChoice[] {
   return [{ key: "cleanup", title: "Clean up disk space", detail }];
 }
 
-export function launch(): Launch {
+/**
+ * The session a launch key starts: `cleanup` from the launcher looks at
+ * everything; a candidate's id or `group:<safety>` from the window's buttons
+ * cleans just that.
+ */
+export function launch(_launchId: string, key: string): Launch {
   return {
-    prompt:
-      "Clean up disk space on this machine. Use the `disk-cleanup` skill: run `disk-scan` to see the drives and what could be cleaned, propose what to clean and ask me with AskUserQuestion before removing anything, then clean what I choose and report what each drive has free before and after.",
+    prompt: cleanupPrompt(state?.last ?? null, key),
     cwd: homedir(),
     name: "disk-cleanup",
   };
+}
+
+/** The session a cleanup became: watched, so the drives are scanned again when it ends. */
+export function launched(_launchId: string, _key: string, sessionId: string): void {
+  state?.cleanups.add(sessionId);
 }
 
 /** A click on the status chip opens the cleanup launcher's one item. */

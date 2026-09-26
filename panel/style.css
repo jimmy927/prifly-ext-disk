@@ -209,6 +209,15 @@ h2 {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.row.candidate {
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: start;
+}
+.btn.small {
+  padding: 2px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .bar-line {
   grid-column: 2;
   height: 4px;

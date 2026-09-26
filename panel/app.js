@@ -13,6 +13,8 @@ const SAFETY = {
 let last = null;
 let tab = null;
 let polling = null;
+/** The keys a cleanup session was started for while this page is open. */
+const started = new Set();
 
 function bytes(n) {
   const units = ["B", "kB", "MB", "GB", "TB"];
@@ -172,6 +174,29 @@ function drawUsage(scan) {
     $("usage").append(el("p", { class: "hint" }, "Nothing big found here yet."));
 }
 
+/**
+ * A Clean up button: asks prifly to start a session for this key in a window
+ * of its own (`prifly-launch`), which the extension's `launch` writes the
+ * prompt for. Several can run at once, and this window can be closed.
+ * Outside prifly — the page opened on its own — there is nobody to ask.
+ */
+function cleanupButton(key, label) {
+  if (window.parent === window) return null;
+  const done = started.has(key);
+  const button = el("button", { type: "button", class: "btn small" }, done ? "Started ↗" : label);
+  button.disabled = done;
+  button.title = done
+    ? "A session for this runs in its own window"
+    : "Start a session in its own window that checks this again, asks you once, and cleans it";
+  button.addEventListener("click", () => {
+    window.parent.postMessage({ type: "prifly-launch", launcher: "cleanup", key }, "*");
+    started.add(key);
+    button.textContent = "Started ↗";
+    button.disabled = true;
+  });
+  return button;
+}
+
 function candidateRow(candidate) {
   const blockers =
     candidate.blockers.length === 0
@@ -179,7 +204,7 @@ function candidateRow(candidate) {
       : el("ul", { class: "blockers" }, ...candidate.blockers.map((text) => el("li", {}, text)));
   return el(
     "div",
-    { class: "row" },
+    { class: "row candidate" },
     el("span", { class: "size" }, bytes(candidate.bytes)),
     el(
       "span",
@@ -189,6 +214,7 @@ function candidateRow(candidate) {
       el("div", { class: "path" }, candidate.path),
       blockers,
     ),
+    cleanupButton(candidate.id, "Clean up"),
   );
 }
 
@@ -202,7 +228,14 @@ function drawCandidates(scan) {
     return el(
       "div",
       { class: "group" },
-      el("h3", {}, el("span", { class: `dot ${safety}` }), `${SAFETY[safety]} · ${bytes(sum)}`),
+      el(
+        "h3",
+        {},
+        el("span", { class: `dot ${safety}` }),
+        `${SAFETY[safety]} · ${bytes(sum)}`,
+        el("span", { class: "grow" }),
+        cleanupButton(`group:${safety}`, `Clean up all ${list.length}`),
+      ),
       ...list.map(candidateRow),
     );
   });

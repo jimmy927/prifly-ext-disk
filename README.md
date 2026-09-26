@@ -9,6 +9,11 @@ without losing work.
 - **Disk space window** (status bar button): a bar per drive split into what fills it, the
   biggest folders and files per drive, and the cleanup candidates grouped by how careful
   removing them must be.
+- **Clean up** on any candidate, or **Clean up all** on a group, starts a session in a window
+  of its own (Opus, asking before each tool) told exactly what was picked: it checks each item
+  again, asks you once, saves what must be saved, cleans it, and scans again. Start several,
+  close the Disk space window, carry on; the drives are rescanned when each session ends.
+  This needs a prifly with `prifly-launch` (panels asking the window to start a session).
 - **Clean up disk space** in the New session launcher starts a session that runs the
   `disk-cleanup` skill: it shows the drives, proposes what to clean with a questionnaire,
   removes only what you pick, saves uncommitted work and unpushed commits first, and reports
