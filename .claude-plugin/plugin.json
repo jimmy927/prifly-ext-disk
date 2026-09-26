@@ -1,0 +1,9 @@
+{
+  "name": "disk",
+  "description": "Cleaning up disk space with the user: what takes the space, what can go, asking first, and removing it without losing work.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Jimmy Engelbrecht"
+  },
+  "homepage": "https://github.com/jimmy927/prifly-ext-disk"
+}

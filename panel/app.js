@@ -1,0 +1,286 @@
+// The Disk space window: drives, what takes their space, and what could be
+// cleaned. Data comes from `api/status`; `api/rescan` and `api/deep` start
+// scans, and the page polls while one runs.
+
+const $ = (id) => document.getElementById(id);
+const COLOURS = ["--s0", "--s1", "--s2", "--s3", "--s4", "--s5"];
+const SAFETY = {
+  safe: "Safe — nothing is lost",
+  check: "Check first — something may be lost",
+  downtime: "Needs downtime — services stop while it runs",
+};
+
+let last = null;
+let tab = null;
+let polling = null;
+
+function bytes(n) {
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let value = n;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit += 1;
+  }
+  const shown = value >= 100 ? Math.round(value).toString() : value.toPrecision(2);
+  return `${shown} ${units[unit]}`;
+}
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key === "style") node.style.cssText = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child !== null && child !== undefined) node.append(child);
+  }
+  return node;
+}
+
+function ago(at) {
+  const minutes = Math.round((Date.now() - at) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+}
+
+/** A path with `/` and lower case, so Windows and Linux paths compare alike. */
+function norm(path) {
+  return path.replaceAll("\\", "/").toLowerCase().replace(/\/$/, "");
+}
+
+/** The items not inside another listed item: what a drive's bar can stack without counting twice. */
+function outermost(items) {
+  const paths = items.map((item) => norm(item.path));
+  return items.filter((_, i) =>
+    paths.every((other, j) => j === i || !paths[i].startsWith(`${other}/`)),
+  );
+}
+
+function driveCard(drive, usage) {
+  const top = outermost(usage.filter((item) => item.drive === drive.label)).slice(
+    0,
+    COLOURS.length,
+  );
+  const known = top.reduce((sum, item) => sum + item.bytes, 0);
+  const other = Math.max(0, drive.usedBytes - known);
+  const pct = (n) => `${(100 * n) / drive.sizeBytes}%`;
+  const meter = el("div", { class: "meter" });
+  const legend = el("div", { class: "legend" });
+  top.forEach((item, i) => {
+    const colour = `var(${COLOURS[i]})`;
+    meter.append(
+      el("span", {
+        style: `width:${pct(item.bytes)};background:${colour}`,
+        title: `${item.path} — ${bytes(item.bytes)}`,
+      }),
+    );
+    legend.append(
+      el(
+        "span",
+        {},
+        el("span", { class: "swatch", style: `background:${colour}` }),
+        `${label(item)} ${bytes(item.bytes)}`,
+      ),
+    );
+  });
+  meter.append(
+    el("span", { style: `width:${pct(other)};background:var(--other)`, title: "everything else" }),
+  );
+  legend.append(
+    el(
+      "span",
+      {},
+      el("span", { class: "swatch", style: "background:var(--other)" }),
+      `other ${bytes(other)}`,
+    ),
+  );
+  legend.append(
+    el(
+      "span",
+      {},
+      el("span", { class: "swatch", style: "background:var(--free)" }),
+      `free ${bytes(drive.freeBytes)}`,
+    ),
+  );
+  return el(
+    "div",
+    { class: "drive" },
+    el(
+      "div",
+      { class: "drive-head" },
+      el("span", { class: "drive-name" }, drive.label),
+      el(
+        "span",
+        { class: "status" },
+        `${bytes(drive.freeBytes)} free of ${bytes(drive.sizeBytes)}`,
+      ),
+    ),
+    meter,
+    legend,
+  );
+}
+
+function label(item) {
+  if (item.what !== "folder") return item.what;
+  return item.path.split(/[\\/]/).filter(Boolean).at(-1) ?? item.path;
+}
+
+function drawDrives(scan) {
+  $("drives").replaceChildren(...scan.drives.map((drive) => driveCard(drive, scan.usage)));
+}
+
+function drawUsage(scan) {
+  const labels = scan.drives.map((drive) => drive.label);
+  if (tab === null || !labels.includes(tab)) tab = labels[0] ?? null;
+  $("tabs").replaceChildren(
+    ...labels.map((name) => {
+      const button = el(
+        "button",
+        { class: "tab", role: "tab", "aria-selected": String(name === tab) },
+        name,
+      );
+      button.addEventListener("click", () => {
+        tab = name;
+        drawUsage(scan);
+      });
+      return button;
+    }),
+  );
+  const items = scan.usage.filter((item) => item.drive === tab).slice(0, 25);
+  const biggest = items[0]?.bytes ?? 1;
+  $("usage").replaceChildren(
+    ...items.map((item) =>
+      el(
+        "div",
+        { class: "row" },
+        el("span", { class: "size" }, bytes(item.bytes)),
+        el(
+          "span",
+          {},
+          el("div", { class: "path" }, item.path),
+          item.what === "folder" ? null : el("div", { class: "what" }, item.what),
+        ),
+        el("span", { class: "bar-line", style: `width:${(100 * item.bytes) / biggest}%` }),
+      ),
+    ),
+  );
+  if (items.length === 0)
+    $("usage").append(el("p", { class: "hint" }, "Nothing big found here yet."));
+}
+
+function candidateRow(candidate) {
+  const blockers =
+    candidate.blockers.length === 0
+      ? null
+      : el("ul", { class: "blockers" }, ...candidate.blockers.map((text) => el("li", {}, text)));
+  return el(
+    "div",
+    { class: "row" },
+    el("span", { class: "size" }, bytes(candidate.bytes)),
+    el(
+      "span",
+      {},
+      el("div", {}, `${candidate.title} `, el("span", { class: "what" }, `on ${candidate.drive}`)),
+      el("div", { class: "why" }, candidate.why),
+      el("div", { class: "path" }, candidate.path),
+      blockers,
+    ),
+  );
+}
+
+function drawCandidates(scan) {
+  const total = scan.candidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
+  $("cleanable").textContent = `— ${bytes(total)} in ${scan.candidates.length} places`;
+  const groups = ["safe", "check", "downtime"].map((safety) => {
+    const list = scan.candidates.filter((candidate) => candidate.safety === safety);
+    if (list.length === 0) return null;
+    const sum = list.reduce((acc, candidate) => acc + candidate.bytes, 0);
+    return el(
+      "div",
+      { class: "group" },
+      el("h3", {}, el("span", { class: `dot ${safety}` }), `${SAFETY[safety]} · ${bytes(sum)}`),
+      ...list.map(candidateRow),
+    );
+  });
+  $("candidates").replaceChildren(...groups.filter(Boolean));
+  $("notes").replaceChildren(...scan.notes.map((note) => el("li", {}, `Not read — ${note}`)));
+}
+
+function drawStatus(state) {
+  const parts = [];
+  if (state.scanning) parts.push("Scanning…");
+  else if (state.scan)
+    parts.push(`Scanned ${ago(state.scan.at)} (${Math.round(state.scan.took / 1000)} s)`);
+  if (state.deepScanning) parts.push("reading Windows folders…");
+  else if (state.windowsAt > 0) parts.push(`Windows folders read ${ago(state.windowsAt)}`);
+  $("status").textContent = parts.join(" · ");
+  $("rescan").disabled = state.scanning;
+  $("deep").disabled = state.deepScanning;
+  $("error").hidden = state.error === "";
+  $("error").textContent = state.error;
+}
+
+function draw(state) {
+  last = state;
+  drawStatus(state);
+  if (state.scan === null) {
+    $("drives").replaceChildren(
+      el("p", { class: "hint" }, "The first scan runs a few seconds after prifly starts."),
+    );
+    return;
+  }
+  drawDrives(state.scan);
+  drawUsage(state.scan);
+  drawCandidates(state.scan);
+}
+
+async function call(path) {
+  const response = await fetch(`api/${path}`);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? response.statusText);
+  return body;
+}
+
+async function refresh(path = "status") {
+  try {
+    const state = await call(path);
+    draw(state);
+    const busy = state.scanning || state.deepScanning;
+    clearTimeout(polling);
+    if (busy) polling = setTimeout(() => void refresh(), 3000);
+  } catch (error) {
+    $("error").hidden = false;
+    $("error").textContent = String(error.message ?? error);
+  }
+}
+
+$("rescan").addEventListener("click", () => void refresh("rescan"));
+$("deep").addEventListener("click", () => void refresh("deep"));
+
+const LOOK = {
+  "--background": "--bg",
+  "--foreground": "--fg",
+  "--card": "--card",
+  "--muted": "--muted",
+  "--muted-foreground": "--muted-fg",
+  "--border": "--border",
+  "--accent": "--accent",
+  "--font-sans": "--font",
+  "--font-mono": "--mono",
+};
+addEventListener("message", (event) => {
+  if (event.data?.type !== "prifly-look") return;
+  document.documentElement.classList.toggle("dark", event.data.dark === true);
+  for (const [theirs, ours] of Object.entries(LOOK)) {
+    const value = event.data.tokens?.[theirs];
+    if (typeof value === "string" && value !== "")
+      document.documentElement.style.setProperty(ours, value);
+  }
+  if (last !== null) draw(last);
+});
+
+void refresh();

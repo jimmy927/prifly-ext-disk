@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Disk space</title>
+    <link rel="stylesheet" href="style.css" />
+    <script>
+      // Before the first paint: the window says light or dark in the query.
+      if (new URLSearchParams(location.search).get("theme") === "dark") {
+        document.documentElement.classList.add("dark");
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app">
+      <div class="bar">
+        <h1>Disk space</h1>
+        <span class="grow"></span>
+        <span class="status" id="status" aria-live="polite"></span>
+        <button type="button" class="btn" id="deep" title="Walks every Windows drive; takes minutes">
+          Read Windows folders
+        </button>
+        <button type="button" class="btn" id="rescan">Scan again</button>
+      </div>
+      <p class="error" id="error" hidden></p>
+      <section>
+        <h2>Drives</h2>
+        <div class="drives" id="drives"></div>
+      </section>
+      <div class="columns">
+        <section>
+          <h2>What takes the space</h2>
+          <div class="tabs" id="tabs" role="tablist"></div>
+          <div class="usage" id="usage"></div>
+        </section>
+        <section>
+          <h2>Could be cleaned <span class="sum" id="cleanable"></span></h2>
+          <p class="hint">
+            Start <b>Clean up disk space</b> from the New session launcher, or ask any session to
+            “clean up disk space”: it proposes from this list and asks before removing anything.
+          </p>
+          <div id="candidates"></div>
+          <ul class="notes" id="notes"></ul>
+        </section>
+      </div>
+    </div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

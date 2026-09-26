@@ -1,0 +1,16 @@
+{
+  "name": "prifly-ext-disk",
+  "private": true,
+  "type": "module",
+  "description": "A prifly extension: how full your drives are, what takes the space, and a Claude Code skill that cleans up with you.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/bun": "^1.1.14",
+    "typescript": "^7.0.2"
+  }
+}

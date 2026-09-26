@@ -1,0 +1,4 @@
+{
+  "roots": ["/home/you", "/home/you/src"],
+  "postgres": { "host": "127.0.0.1", "user": "postgres", "port": 5432 }
+}
