@@ -88,7 +88,11 @@ export function imageFindings(
   drive: string,
 ): { usage: Usage; candidate: Candidate | null } {
   const docker = image.distro.startsWith("docker-desktop");
-  const what = docker ? "Docker Desktop disk image" : `WSL disk image (${image.distro})`;
+  // Docker Desktop has two: its small system disk and the data disk that grows.
+  const dockerDisk = image.path.toLowerCase().endsWith("docker_data.vhdx") ? "data" : "system";
+  const what = docker
+    ? `Docker Desktop ${dockerDisk} disk image`
+    : `WSL disk image (${image.distro})`;
   const usage: Usage = { drive, path: image.path, bytes: image.allocated, what };
   if (insideBytes === null || image.allocated - insideBytes < WORTH_IT) {
     return { usage, candidate: null };
