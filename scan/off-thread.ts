@@ -7,7 +7,7 @@
  * 117 s scan; run on its own, the scan held a thread up to 215 ms, where every
  * worktree's git processes are started (`Bun.spawn` takes ~2 ms of the thread
  * each) and its files stat'ed. The thread is started per scan and ended after it: a
- * scan runs every half hour, and between them it would only hold memory.
+ * scan runs only when asked, and between them it would only hold memory.
  */
 
 import type { Part } from "./progress";

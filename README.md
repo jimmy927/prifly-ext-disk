@@ -33,8 +33,8 @@ Your own data (games, Documents, Steam) shows under what takes the space but is 
 works in — its folder, its scratch folder, worktrees inside it — is offered, and neither are
 locked worktrees (a sub-agent is in them).
 
-The scan runs at start and every half hour, in the background, and **Scan now** in the
-window starts one; while it runs, the window shows each part — Linux folders, Windows
+The scan runs only when asked — **Scan now** in the window, and after a cleanup
+started from the window ends; while it runs, the window shows each part — Linux folders, Windows
 folders, disk images, Docker, databases, scratch folders, worktrees — with what it has
 counted so far. `disk-scan` prints the last scan in a session (`--fresh` scans now, with
 each part's progress on standard error; `--json` for JSON).

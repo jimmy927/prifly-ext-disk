@@ -7,7 +7,8 @@ description: Freeing disk space with the user - what fills each drive, which of 
 
 The `disk-scan` program (on the PATH of every session prifly runs) prints the
 drives and a list of cleanup candidates, grouped by how careful removal must
-be. The prifly extension rescans every half hour; `disk-scan --fresh` scans
+be. The prifly extension scans only when the reader asks for it, so the last
+scan can be hours or days old; `disk-scan --fresh` scans
 now (about a minute and a half, each part's progress on standard error),
 `disk-scan --json` gives the same as JSON.
 
