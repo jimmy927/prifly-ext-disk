@@ -8,7 +8,7 @@
 import { join } from "node:path";
 import { FASTDU_VERSION, fastduBinary, unixAsset } from "../fastdu-release";
 import type { WalkProgress } from "../walk";
-import { runStreaming } from "../windows/fastdu";
+import { runStreaming, walkFailed } from "../windows/fastdu";
 
 const CACHE = join(import.meta.dir, "..", "..", "cache");
 
@@ -54,15 +54,19 @@ export async function nativeWalk(
 ): Promise<{ sizes: Map<string, number>; progress: WalkProgress }> {
   const exe = await linuxFastdu();
   let last: WalkProgress = { dirs: 0, files: 0, bytes: 0 };
+  // du's options: -x one file system per root, -D a root given as a symbolic
+  // link is followed, -B1 disk usage in bytes, --file-count the file-count
+  // column, -t the smallest folder printed.
+  const argv = [exe, "-p", "-x", "-D", "-B1", "--file-count", "-t", String(minBytes)];
   const done = await runStreaming(
-    [exe, "-p", "-m", String(minBytes), "-j", String(threads), "--", ...roots],
+    [...argv, "-j", String(threads), "--", ...roots],
     (progress) => {
       last = progress;
       onProgress(progress);
     },
     "/",
   );
-  if (done.code !== 0) {
+  if (walkFailed(done)) {
     throw new Error(`fastdu exited ${done.code}: ${done.errors.trim().split("\n").at(-1) ?? ""}`);
   }
   const sizes = parseSizes(done.out);

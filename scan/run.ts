@@ -21,15 +21,43 @@ export function interopFailed(message: string): boolean {
   return message.includes("UtilAcceptVsock");
 }
 
+/**
+ * Tries a Windows program gets while WSL fails to start it. One more was not
+ * always enough: the Windows folders' part failed with fastdu and then its
+ * PowerShell fallback both refused (2026-09-27), while a scan started several.
+ */
+const INTEROP_TRIES = 3;
+
+/** `start` again, a second longer each time, while WSL could not start the program. */
+export async function interopRetry<T>(
+  start: () => Promise<T>,
+  failed: (result: T) => string | null,
+): Promise<T> {
+  let result = await start();
+  for (let attempt = 1; attempt < INTEROP_TRIES; attempt++) {
+    const why = failed(result);
+    if (why === null || !interopFailed(why)) return result;
+    await Bun.sleep(1000 * attempt);
+    result = await start();
+  }
+  return result;
+}
+
 /** A program's standard output; a non-zero exit or a timeout throws `CommandFailed`. */
 export async function run(argv: string[], timeoutMs = 120_000, cwd?: string): Promise<string> {
-  try {
-    return await runOnce(argv, timeoutMs, cwd);
-  } catch (error) {
-    if (!(error instanceof CommandFailed) || !interopFailed(error.message)) throw error;
-    await Bun.sleep(1000);
-    return runOnce(argv, timeoutMs, cwd);
-  }
+  const outcome = await interopRetry(
+    () =>
+      runOnce(argv, timeoutMs, cwd).then(
+        (out) => ({ out, error: null as CommandFailed | null }),
+        (error: unknown) => {
+          if (error instanceof CommandFailed) return { out: "", error };
+          throw error;
+        },
+      ),
+    (result) => result.error?.message ?? null,
+  );
+  if (outcome.error !== null) throw outcome.error;
+  return outcome.out;
 }
 
 async function runOnce(argv: string[], timeoutMs: number, cwd?: string): Promise<string> {

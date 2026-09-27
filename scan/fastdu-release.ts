@@ -9,13 +9,13 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-export const FASTDU_VERSION = "1.1.1";
+export const FASTDU_VERSION = "3.0.0";
 
 const SHA256 = {
-  "fastdu-linux-x64": "0020e629b72adb8d19ba3f7b69feac5176a8f21c8818d2d705f97094954a338d",
-  "fastdu-linux-arm64": "56ab6a6cc10c2d9f379775e8b0db23baf2f2323887b80e86d2014f3f5fd28576",
-  "fastdu-macos": "11e5844e93e96823703511c58a8bdbb13d971cfd953de1c1a34039235fe3ed0b",
-  "fastdu-windows-x64.exe": "e772d3e8b416f71a5ca40f6801cec6f8503d3a8a860c3891e8417723b97ad660",
+  "fastdu-linux-x64": "40a2d0020093adc63c2fb0cd57ca3b0c89cc652c27f1527df2b87085ff1fec6c",
+  "fastdu-linux-arm64": "5821b00a8219b67dd59f869af879dcac00b0c1712eba6e925ded7c80994886ba",
+  "fastdu-macos": "ce4d0c7e36b5b709e7b50322f1dda23c4fcabe99745bbe19649f3b00d7b16972",
+  "fastdu-windows-x64.exe": "6b23afa81f0037bc2cc0467ec40c821a28b32db0d18555b5dd2918157db121a3",
 } as const;
 
 export type FastduAsset = keyof typeof SHA256;

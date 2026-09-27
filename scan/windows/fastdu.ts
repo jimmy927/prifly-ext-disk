@@ -18,7 +18,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { FASTDU_VERSION, fastduBinary } from "../fastdu-release";
-import { interopFailed, run } from "../run";
+import { interopRetry, run } from "../run";
 import type { WalkProgress } from "../walk";
 
 const SOURCE = join(import.meta.dir, "fastdu.cs");
@@ -128,13 +128,17 @@ export async function windowsFolders(
   // One per core: they mostly wait on NTFS, and on all of C: 16 took 11.5 s
   // where 8 took 13.0 and 32 took 14.4 (2026-09-27).
   const threads = String(availableParallelism());
+  // du's options: -b file lengths in bytes (what Explorer shows), and fastdu's
+  // --file-count the file-count column; -t the smallest folder printed.
   const argv = walker.release
     ? [
         walker.exe,
         "-p",
+        "-b",
+        "--file-count",
         "-d",
         String(depth),
-        "-m",
+        "-t",
         String(minBytes),
         "-j",
         threads,
@@ -142,28 +146,45 @@ export async function windowsFolders(
         ...drives,
       ]
     : [walker.exe, String(depth), String(minBytes), threads, ...drives];
-  let done = await runStreaming(argv, onProgress);
-  // WSL could not start it at all (`run.ts`): it never ran, so once more.
-  if (done.code !== 0 && interopFailed(done.errors)) {
-    await Bun.sleep(1000);
-    done = await runStreaming(argv, onProgress);
-  }
-  if (done.code !== 0) {
+  const done = await runStreaming(argv, onProgress);
+  if (walkFailed(done)) {
     throw new Error(`fastdu exited ${done.code}: ${done.errors.trim().split("\n").at(-1) ?? ""}`);
   }
   return parseFolders(done.out);
 }
 
 /**
- * One run of a Windows program that prints folders on standard output and
- * `progress` lines on standard error — fastdu, or the PowerShell walk that
- * stands in for it: its output, its exit, and what else it said.
+ * Whether a walk gave nothing to use. Like du, fastdu exits 1 when some folder
+ * could not be read (on C:, WindowsApps always), and what it printed is still
+ * everything else; only another exit, or 1 with nothing printed, is a failure.
  */
-export async function runStreaming(
+export function walkFailed(done: { out: string; code: number }): boolean {
+  return done.code !== 0 && !(done.code === 1 && done.out.trim() !== "");
+}
+
+/**
+ * One run of a program that prints folders on standard output and `progress`
+ * lines on standard error — fastdu, or the PowerShell walk that stands in for
+ * it: its output, its exit, and what else it said. Started again while WSL
+ * could not start it at all (`interopRetry`): it never ran, so no progress was
+ * reported for it.
+ */
+export function runStreaming(
   argv: string[],
   onProgress: (progress: WalkProgress) => void,
   /** A Windows program starts from a Windows folder, or it warns about UNC paths. */
   cwd = "/mnt/c",
+): Promise<{ out: string; code: number; errors: string }> {
+  return interopRetry(
+    () => streamOnce(argv, onProgress, cwd),
+    (done) => (done.code === 0 ? null : done.errors),
+  );
+}
+
+async function streamOnce(
+  argv: string[],
+  onProgress: (progress: WalkProgress) => void,
+  cwd: string,
 ): Promise<{ out: string; code: number; errors: string }> {
   const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
   let errors = "";

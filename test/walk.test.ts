@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { linuxFolders, windowsUsage } from "../scan/folders";
 import { counted, type Part, Progress } from "../scan/progress";
-import { interopFailed, run } from "../scan/run";
+import { interopFailed, interopRetry, run } from "../scan/run";
 import { sizerOf, walk } from "../scan/walk";
-import { parseFolders, parseProgress } from "../scan/windows/fastdu";
+import { parseFolders, parseProgress, walkFailed } from "../scan/windows/fastdu";
 
 /** A tree with nesting, an empty folder, and a file under two names. */
 function tree(): string {
@@ -94,6 +94,36 @@ describe("what takes the space", () => {
     });
     expect(parseProgress("usage: fastdu <depth> …")).toBeNull();
   });
+});
+
+test("fastdu exiting 1 over an unreadable folder still walked; with nothing printed it did not", () => {
+  expect(walkFailed({ out: "123\t4\tC:\n", code: 0 })).toBe(false);
+  expect(walkFailed({ out: "123\t4\tC:\n", code: 1 })).toBe(false);
+  expect(walkFailed({ out: "", code: 1 })).toBe(true);
+  expect(walkFailed({ out: "123\t4\tC:\n", code: 2 })).toBe(true);
+});
+
+test("a program WSL could not start is started again, up to three times; other failures are not", async () => {
+  const interop = "<3>WSL (2946390 - ) ERROR: UtilAcceptVsock:273: accept4 failed 110";
+  let calls = 0;
+  const got = await interopRetry(
+    async () => {
+      calls += 1;
+      return calls < 3 ? { code: 1, errors: interop } : { code: 0, errors: "" };
+    },
+    (done) => (done.code === 0 ? null : done.errors),
+  );
+  expect(got.code).toBe(0);
+  expect(calls).toBe(3);
+  let once = 0;
+  await interopRetry(
+    async () => {
+      once += 1;
+      return { code: 2, errors: "usage" };
+    },
+    (done) => done.errors,
+  );
+  expect(once).toBe(1);
 });
 
 test("only WSL failing to start a Windows program is worth starting it again", () => {
