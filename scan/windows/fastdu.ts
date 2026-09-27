@@ -1,23 +1,28 @@
 /**
- * The Windows drives' folder sizes, from `fastdu.cs` — the directory listings
- * alone, on several threads. On 2026-09-27 it read `C:\Program Files` in 3.3 s
- * where PowerShell's Get-ChildItem took 28.6 s, same bytes to the byte, and
- * all of C: and D: (2.0 M files, 2.3 TB) in 76 s.
+ * The Windows drives' folder sizes, from the directory listings alone.
  *
- * It is compiled on first use with the C# compiler every Windows has, into
- * `%LOCALAPPDATA%\prifly-disk\`, under a name carrying the source's hash so a
- * changed source builds anew. Run from there, not from a WSL path, which
+ * Two builds of the same program, the faster first:
+ *   - `fastdu.c`, native, shipped prebuilt as `fastdu-c-<hash>.exe` (Windows
+ *     has no C compiler of its own; `build.ts` makes it with Visual Studio's).
+ *     All of C: (1.86 M files) in 15.4 s against gdu's 32 s under load, and
+ *     11.5 s on a quiet machine (2026-09-27).
+ *   - `fastdu.cs`, compiled on first use with the C# compiler every Windows
+ *     has, when no prebuilt one matches the source — with the server garbage
+ *     collector, which took it from 22 s to 15 s on C: at 16 threads.
+ * Both are copied or built into `%LOCALAPPDATA%\prifly-disk\`, under names
+ * carrying their source's hash, and run from there, not from a WSL path, which
  * Windows would treat as a network location.
  */
 
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { interopFailed, run } from "../run";
 import type { WalkProgress } from "../walk";
 
 const SOURCE = join(import.meta.dir, "fastdu.cs");
+const NATIVE_SOURCE = join(import.meta.dir, "fastdu.c");
 const CSC = "/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe";
 const CMD = "/mnt/c/Windows/System32/cmd.exe";
 
@@ -46,13 +51,35 @@ export function fastdu(): Promise<string> {
   return built;
 }
 
+/** The prebuilt native one's name for the C source as it is now. */
+export function nativeName(): string {
+  return `fastdu-c-${hashOf(NATIVE_SOURCE)}.exe`;
+}
+
+function hashOf(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 12);
+}
+
 async function buildFastdu(): Promise<string> {
-  const hash = createHash("sha256").update(readFileSync(SOURCE)).digest("hex").slice(0, 12);
   const folder = await toolFolder();
+  mkdirSync(folder.linux, { recursive: true });
+  // The native build, when one was made from the source as it is now.
+  const prebuilt = join(import.meta.dir, nativeName());
+  if (existsSync(prebuilt)) {
+    const exe = join(folder.linux, nativeName());
+    if (!existsSync(exe)) copyFileSync(prebuilt, exe);
+    return exe;
+  }
+  const hash = hashOf(SOURCE);
   const exe = join(folder.linux, `fastdu-${hash}.exe`);
   if (existsSync(exe)) return exe;
-  mkdirSync(folder.linux, { recursive: true });
   copyFileSync(SOURCE, join(folder.linux, `fastdu-${hash}.cs`));
+  // One heap per core: with the shared default, 16 threads allocating file
+  // names spent their time waiting on each other (22 s against 15 s on C:).
+  writeFileSync(
+    join(folder.linux, `fastdu-${hash}.exe.config`),
+    '<?xml version="1.0"?>\r\n<configuration><runtime><gcServer enabled="true"/><gcConcurrent enabled="false"/></runtime></configuration>\r\n',
+  );
   await run(
     [
       CSC,
@@ -102,7 +129,9 @@ export async function windowsFolders(
 ): Promise<WindowsFolder[]> {
   if (drives.length === 0) return [];
   const exe = await fastdu();
-  const threads = Math.max(4, Math.floor(availableParallelism() / 2));
+  // One per core: they mostly wait on NTFS, and on all of C: 16 took 11.5 s
+  // where 8 took 13.0 and 32 took 14.4 (2026-09-27).
+  const threads = availableParallelism();
   const argv = [exe, String(depth), String(minBytes), String(threads), ...drives];
   let done = await runStreaming(argv, onProgress);
   // WSL could not start it at all (`run.ts`): it never ran, so once more.
@@ -124,8 +153,10 @@ export async function windowsFolders(
 export async function runStreaming(
   argv: string[],
   onProgress: (progress: WalkProgress) => void,
+  /** A Windows program starts from a Windows folder, or it warns about UNC paths. */
+  cwd = "/mnt/c",
 ): Promise<{ out: string; code: number; errors: string }> {
-  const proc = Bun.spawn(argv, { cwd: "/mnt/c", stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
   let errors = "";
   const reading = (async () => {
     let pending = "";
