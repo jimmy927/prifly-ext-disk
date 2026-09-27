@@ -3,7 +3,7 @@
  * be cleaned — in a window of its own (`panel/`) — handed to the
  * `disk-cleanup` skill, which asks the reader what to clean and does it.
  *
- * A scan runs at start and every half hour, and on demand from the window,
+ * A scan runs ten minutes after start and every half hour, and on demand from the window,
  * whose progress it shows part by part while it runs. Its result is kept in
  * `cache/scan.json`, with the sessions it judged by, so `bin/disk-scan` — what
  * the skill runs — answers at once and judges sessions the same way; a scan
@@ -25,6 +25,14 @@ import { isLive, readArchived, withArchived } from "./scan/sessions";
 import type { Scan } from "./scan/types";
 
 const EVERY = 30 * 60_000;
+/**
+ * The first scan waits until the host has settled. Ten seconds in it landed
+ * in prifly's own start (index pass, history reading) and made it worse: the
+ * walk of ~ and /tmp lstats 6.25 M files, 83 s and 12 GB read from disk with
+ * a cold cache (2026-09-27). The cached scan is shown until then, and the
+ * window's Rescan runs one at once.
+ */
+const FIRST_AFTER = 10 * 60_000;
 /** How often the cleanup sessions this started are looked at, to rescan when one ends. */
 const CLEANUPS_EVERY = 60_000;
 
@@ -55,7 +63,8 @@ function rescan(current: State): Promise<Scan> {
       current.last = result;
       current.error = "";
       writeCache(current.api.folder, { scan: result, sessions: info });
-      current.api.log("scanned", { took: result.took, candidates: result.candidates.length });
+      // `ms`, the field prifly's `perf:report` totals time by.
+      current.api.log("scanned", { ms: result.took, candidates: result.candidates.length });
       return result;
     })
     .catch((error: unknown) => {
@@ -97,7 +106,7 @@ export function activate(api: ExtensionApi): () => void {
     cleanups: new Set(),
   };
   state = current;
-  const soon = setTimeout(() => void rescan(current).catch(() => undefined), 10_000);
+  const soon = setTimeout(() => void rescan(current).catch(() => undefined), FIRST_AFTER);
   const timer = setInterval(() => void rescan(current).catch(() => undefined), EVERY);
   const watcher = setInterval(() => watchCleanups(current), CLEANUPS_EVERY);
   return () => {
