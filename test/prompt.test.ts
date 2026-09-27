@@ -50,12 +50,11 @@ const scan: Scan = {
 };
 
 describe("which candidates a launch key names", () => {
-  test("one by its id, a group by its safety, everything by `cleanup`", () => {
+  test("one by its id, a group by its safety", () => {
     expect(chosen(scan, "worktree:/home/j/src/lc-xrust").map((c) => c.id)).toEqual([
       "worktree:/home/j/src/lc-xrust",
     ]);
     expect(chosen(scan, "group:check")).toHaveLength(2);
-    expect(chosen(scan, "cleanup")).toHaveLength(3);
   });
 
   test("a key naming nothing, or a group that is no safety, names nothing", () => {
@@ -80,10 +79,6 @@ describe("the prompt a cleanup session starts with", () => {
     expect(prompt).toContain("these 2 (759 GB");
     expect(prompt).toContain("Database odi_old");
     expect(prompt).toContain("lc-xrust");
-  });
-
-  test("the launcher's `cleanup` looks at everything and needs no scan", () => {
-    expect(cleanupPrompt(null, "cleanup")).toContain("run `disk-scan`");
   });
 
   test("something no longer listed, or no scan yet, starts nothing", () => {

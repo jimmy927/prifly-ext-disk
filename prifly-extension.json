@@ -14,13 +14,5 @@
       "folder": "panel",
       "page": "index.html"
     }
-  ],
-  "launch": [
-    {
-      "id": "cleanup",
-      "label": "Clean up disk space",
-      "icon": "hard-drive",
-      "description": "Start a session that proposes what to clean, asks you, and cleans up"
-    }
   ]
 }
