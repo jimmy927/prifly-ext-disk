@@ -16,12 +16,11 @@
 
 import { homedir } from "node:os";
 import type { ExtensionApi, Launch, PanelRequest } from "./prifly-api";
-import { readCache, writeCache } from "./scan/cache";
-import { readConfig } from "./scan/config";
+import { readCache } from "./scan/cache";
+import { type Running, ScanStopped, scanOffThread } from "./scan/off-thread";
 import type { Part } from "./scan/progress";
 import { cleanupPrompt } from "./scan/prompt";
-import { scan } from "./scan/scan";
-import { isLive, readArchived, withArchived } from "./scan/sessions";
+import { isLive, withArchived } from "./scan/sessions";
 import type { Scan } from "./scan/types";
 
 const EVERY = 30 * 60_000;
@@ -39,7 +38,7 @@ const CLEANUPS_EVERY = 60_000;
 type State = {
   api: ExtensionApi;
   last: Scan | null;
-  running: Promise<Scan> | null;
+  running: Running | null;
   /** The running scan's parts, as far as each has got; the last scan's once it is over. */
   parts: Part[];
   error: string;
@@ -49,25 +48,31 @@ type State = {
 
 let state: State | null = null;
 
-function sessions(api: ExtensionApi) {
-  return withArchived(api.sessions(), readArchived());
-}
-
+/**
+ * A scan, on a thread of its own (`scan/off-thread.ts`): it reads the
+ * archived marks, scans and writes the cache there, and only its result and
+ * its parts' progress come back here.
+ */
 function rescan(current: State): Promise<Scan> {
-  if (current.running !== null) return current.running;
-  const info = sessions(current.api);
-  current.running = scan({ sessions: info, config: readConfig(current.api.folder) }, (parts) => {
-    current.parts = parts;
-  })
+  if (current.running !== null) return current.running.done;
+  const running = scanOffThread(
+    { sessions: current.api.sessions(), folder: current.api.folder },
+    (parts) => {
+      current.parts = parts;
+    },
+  );
+  current.running = running;
+  return running.done
     .then((result) => {
       current.last = result;
       current.error = "";
-      writeCache(current.api.folder, { scan: result, sessions: info });
       // `ms`, the field prifly's `perf:report` totals time by.
       current.api.log("scanned", { ms: result.took, candidates: result.candidates.length });
       return result;
     })
     .catch((error: unknown) => {
+      // Stopped with the extension: nothing failed, and nobody is left to tell.
+      if (error instanceof ScanStopped) throw error;
       current.error = error instanceof Error ? error.message : String(error);
       current.api.log("scan_failed", { error: current.error });
       throw error;
@@ -75,7 +80,6 @@ function rescan(current: State): Promise<Scan> {
     .finally(() => {
       current.running = null;
     });
-  return current.running;
 }
 
 /** A cleanup session that has ended is what the drives look like now: scan again. */
@@ -83,8 +87,9 @@ function watchCleanups(current: State): void {
   if (current.cleanups.size === 0) return;
   // Judged by prifly's own states alone: it knows its sessions whatever the system.
   const nobody = { ids: new Set<string>(), folders: [], known: true };
+  // Archived or not makes no difference to running, so prifly's database is not read.
   const live = new Set(
-    sessions(current.api)
+    withArchived(current.api.sessions(), new Set())
       .filter((session) => isLive(session, nobody))
       .map((session) => session.id),
   );
@@ -113,6 +118,7 @@ export function activate(api: ExtensionApi): () => void {
     clearTimeout(soon);
     clearInterval(timer);
     clearInterval(watcher);
+    current.running?.stop();
     state = null;
   };
 }
