@@ -1,10 +1,10 @@
 /**
  * Folder sizes on this Linux, in one pass, on many threads.
  *
- * `walkFastest` runs fastdu in C (`linux/fastdu.c`), 1.2 s on ~/src (1.1 M
+ * `walkFastest` runs fastdu (`linux/fastdu.ts`), 1.2 s on ~/src (1.1 M
  * files) where gdu took 4.2 s and ncdu 2.8 s (2026-09-27, medians under
- * load). Where it cannot be built — no C compiler — `walk` below does the same
- * in TypeScript, about 7.9 s:
+ * load). Where it cannot be had — offline, another processor — `walk` below
+ * does the same in TypeScript, about 7.9 s:
  *
  * A directory listing gives names and types but not sizes, so every file
  * needs an `lstat` — the slow part, and `du` does them one after another. Here
@@ -58,8 +58,8 @@ export type Walked = {
 };
 
 /**
- * The fastest walk this machine can do: fastdu in C (`linux/fastdu.c`), or,
- * when it cannot be built or run here, the TypeScript walk below — with why.
+ * The fastest walk this machine can do: fastdu (`linux/fastdu.ts`), or, when
+ * it cannot be had or run here, the TypeScript walk below — with why.
  */
 export async function walkFastest(
   roots: string[],

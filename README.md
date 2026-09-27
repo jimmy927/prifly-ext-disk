@@ -45,67 +45,36 @@ each part's progress on standard error; `--json` for JSON).
 
 ## How it reads sizes fast
 
-A directory listing is cheap; asking the file system about each file is what costs.
+Folder sizes come from [fastdu](https://github.com/jimmy927/fastdu), a `du` in C for
+Windows and Linux that uses every core and asks the file system as little as it can: all
+of `C:\` (1.86 M files) in 13.1 s where gdu takes 16.2 s, and `~/src` (1.15 M files) in
+1.5 s where ncdu takes 2.5 s. Its README says how, and has the benchmarks.
 
-- **Windows drives** are read by `fastdu` (`scan/windows/fastdu.c`). Windows' directory
-  listing already carries each file's size, so a whole drive is summed from the listings
-  alone — no file is opened or stat-ed. Each folder is opened relative to its parent's
-  handle (`NtOpenFile`), so the kernel looks up one name rather than a whole path, and
-  listed 256 KB at a time (`NtQueryDirectoryFile`); entries are read in place, only folder
-  names copied. Windows has no C compiler of its own, so it ships prebuilt as
-  `fastdu-c-<hash>.exe`; `bun scan/windows/build.ts` rebuilds it with Visual Studio after
-  the source changes. Without a matching build, `fastdu.cs` — the same program in C# — is
-  compiled with the compiler every Windows has, and without that, PowerShell reads it.
-  The walk is bound by the kernel: at 16 threads Windows sits at 100 % CPU, 75–97 % of it
-  in the kernel.
-- **Linux** listings carry no sizes, so every entry does need a stat. `fastdu`
-  (`scan/linux/fastdu.c`, compiled on first use with the system's `cc`) lists with
-  `getdents64` into 1 MB buffers and stats each entry relative to its folder's descriptor
-  (`fstatat`), on every core. The stats are what cost, so there are as few as possible: a
-  file whose inode number — which the listing gives for free — was already seen is another
-  name for a file already counted and is not stat-ed (~/src had 2.49 M file names for
-  1.15 M files, `node_modules` being hard-linked between checkouts); a folder's own size
-  comes from `fstat` on the descriptor it is listed through; and a listing that leaves the
-  buffer part-empty is the whole folder, so the call that would only say "end" is skipped.
-  One thread: 8.45 s → 5.37 s on ~/src. The home folder and `/tmp` are walked once — every folder's
-  size comes out of the one pass, and the scratch folders, worktrees and biggest folders
-  are looked up in it. Without a C compiler, the same walk runs in TypeScript
-  (`scan/walk.ts`), about five times slower. Counted like `du -x`: allocated blocks, one
-  file system per root, a file with several hard links once.
+- **Windows drives**: fastdu's release, downloaded on first use into
+  `%LOCALAPPDATA%\prifly-disk\`. Without it, `fastdu.cs` — the same walk in C#, 22 s on
+  `C:\` (15 s with the server garbage collector) — is compiled with the compiler every
+  Windows has, and without that, PowerShell reads the drives.
+- **Linux**: fastdu's release for the processor, downloaded on first use into `cache/`.
+  The home folder and `/tmp` are walked once — every folder's size comes out of the one
+  pass, and the scratch folders, worktrees and biggest folders are looked up in it.
+  Without fastdu, the same walk runs in TypeScript (`scan/walk.ts`), 7.9 s on `~/src`.
+  Counted like `du -x`: allocated blocks, one file system per root, a file with several
+  hard links once.
 - **Postgres** names its databases, and their sizes come from their folders under `base\`,
-  read by `fastdu` — `pg_database_size` stats every segment file, which took 50 s on a
+  read by fastdu — `pg_database_size` stats every segment file, which took 50 s on a
   979 GB database on NTFS against 0.8 s.
 
-Against the command-line disk-usage tools there are, on this machine on 2026-09-27 —
-five interleaved warm rounds, medians, load average 14–20 from other work; `fastdu` was
-fastest in every round:
-
-| | Windows, all of `C:\` (1.86 M files) | Linux, `~/src` (1.15 M files) |
-|---|---|---|
-| **fastdu** | **13.1 s** | **1.5 s** |
-| gdu 5 | 16.2 s | 2.9 s |
-| dua 2.45 | 17.6 s, missing ~110 GiB to permission errors | 12.6–17.5 s |
-| ncdu 2.9 (`-t 16`) | — (no Windows build) | 2.5 s |
-| diskus 0.9 | 61 s | 3.9–6.9 s |
-| dust 1.2 | 74 s | 25–44 s |
-| pdu 0.24 | 54–105 s | 29–32 s |
-| Sysinternals du | 574 s | — |
-| `du` | — | 15–19 s |
-| the earlier C# fastdu / TypeScript walk | 22 s (15 s with server GC) | 7.9 s |
-
-Tools that read NTFS's master file table directly (WizTree, Everything) are faster still,
-but need administrator rights on every scan and are not command-line tools.
-- **Postgres** names its databases, and their sizes come from their folders under `base\`,
-  read by `fastdu` — `pg_database_size` stats every segment file, which took 50 s on a
-  979 GB database on NTFS against 0.8 s.
+The version and each binary's SHA-256 are pinned in `scan/fastdu-release.ts`; a download
+that does not match is refused.
 
 A full scan of this machine — 4.2 million files on Linux, 2.0 million on Windows — takes
 about a minute and a half.
 
 When the fast way fails, the slow one stands in and the part says so: PowerShell's
-`Get-ChildItem` for the Windows folders when `fastdu` cannot be built or started, and
-`pg_database_size` for the databases when their folders cannot be read. macOS runs the
-Linux walk for now; a `getattrlistbulk` scanner, its equivalent of `fastdu`, can come later.
+`Get-ChildItem` for the Windows folders when fastdu can neither be had nor started, the
+TypeScript walk for the Linux folders, and `pg_database_size` for the databases when their
+folders cannot be read. macOS runs the TypeScript walk for now; fastdu has no macOS build
+yet.
 
 **Where running sessions cannot be read** — no `/proc`, as on macOS — no scratch folder or
 worktree is offered for cleaning: every session would look ended, and a running one's

@@ -1,6 +1,6 @@
 /**
  * The Windows drives' folder sizes without fastdu: PowerShell's Get-ChildItem,
- * when fastdu cannot be built or started (no C# compiler, a blocked program).
+ * when fastdu can neither be downloaded nor built, or cannot start (a blocked program).
  *
  * The same folders, two levels below each drive's root, and the same progress
  * lines on standard error, so the window shows the walk moving either way —

@@ -1,28 +1,27 @@
 /**
  * The Windows drives' folder sizes, from the directory listings alone.
  *
- * Two builds of the same program, the faster first:
- *   - `fastdu.c`, native, shipped prebuilt as `fastdu-c-<hash>.exe` (Windows
- *     has no C compiler of its own; `build.ts` makes it with Visual Studio's).
- *     All of C: (1.86 M files) in 15.4 s against gdu's 32 s under load, and
- *     11.5 s on a quiet machine (2026-09-27).
- *   - `fastdu.cs`, compiled on first use with the C# compiler every Windows
- *     has, when no prebuilt one matches the source — with the server garbage
- *     collector, which took it from 22 s to 15 s on C: at 16 threads.
- * Both are copied or built into `%LOCALAPPDATA%\prifly-disk\`, under names
- * carrying their source's hash, and run from there, not from a WSL path, which
- * Windows would treat as a network location.
+ * Two builds of the same walk, the faster first:
+ *   - fastdu's native release (`fastdu-release.ts`), downloaded on first use.
+ *     All of C: (1.86 M files) in 13.1 s against gdu's 16.2 s under load, and
+ *     10.5 s on a quiet machine (2026-09-27).
+ *   - `fastdu.cs`, compiled with the C# compiler every Windows has when the
+ *     release cannot be had — with the server garbage collector, which took
+ *     it from 22 s to 15 s on C: at 16 threads.
+ * Both go into `%LOCALAPPDATA%\prifly-disk\`, under names carrying their
+ * version or their source's hash, and run from there, not from a WSL path,
+ * which Windows would treat as a network location.
  */
 
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
+import { FASTDU_VERSION, fastduBinary } from "../fastdu-release";
 import { interopFailed, run } from "../run";
 import type { WalkProgress } from "../walk";
 
 const SOURCE = join(import.meta.dir, "fastdu.cs");
-const NATIVE_SOURCE = join(import.meta.dir, "fastdu.c");
 const CSC = "/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe";
 const CMD = "/mnt/c/Windows/System32/cmd.exe";
 
@@ -35,15 +34,18 @@ async function toolFolder(): Promise<{ linux: string; windows: string }> {
   return { linux, windows };
 }
 
-let built: Promise<string> | null = null;
+/** A walker, and how it takes its arguments: the release's flags, or the C# one's positions. */
+type Walker = { exe: string; release: boolean };
+
+let built: Promise<Walker> | null = null;
 
 /**
- * The compiled scanner, built when missing or when its source changed — once
- * per process: the Windows walk and the database sizes both ask, at once.
+ * The walker, fetched or built when missing — once per process: the Windows
+ * walk and the database sizes both ask, at once.
  */
-export function fastdu(): Promise<string> {
+export function fastdu(): Promise<Walker> {
   if (built === null) {
-    built = buildFastdu().catch((error: unknown) => {
+    built = findFastdu().catch((error: unknown) => {
       built = null;
       throw error;
     });
@@ -51,26 +53,20 @@ export function fastdu(): Promise<string> {
   return built;
 }
 
-/** The prebuilt native one's name for the C source as it is now. */
-export function nativeName(): string {
-  return `fastdu-c-${hashOf(NATIVE_SOURCE)}.exe`;
-}
-
-function hashOf(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 12);
-}
-
-async function buildFastdu(): Promise<string> {
+async function findFastdu(): Promise<Walker> {
   const folder = await toolFolder();
-  mkdirSync(folder.linux, { recursive: true });
-  // The native build, when one was made from the source as it is now.
-  const prebuilt = join(import.meta.dir, nativeName());
-  if (existsSync(prebuilt)) {
-    const exe = join(folder.linux, nativeName());
-    if (!existsSync(exe)) copyFileSync(prebuilt, exe);
-    return exe;
+  try {
+    const exe = join(folder.linux, `fastdu-${FASTDU_VERSION}.exe`);
+    return { exe: await fastduBinary("fastdu-windows-x64.exe", exe), release: true };
+  } catch {
+    // Offline, or the download blocked: the C# build does the same walk.
+    return { exe: await buildCsharp(folder), release: false };
   }
-  const hash = hashOf(SOURCE);
+}
+
+async function buildCsharp(folder: { linux: string; windows: string }): Promise<string> {
+  mkdirSync(folder.linux, { recursive: true });
+  const hash = createHash("sha256").update(readFileSync(SOURCE)).digest("hex").slice(0, 12);
   const exe = join(folder.linux, `fastdu-${hash}.exe`);
   if (existsSync(exe)) return exe;
   copyFileSync(SOURCE, join(folder.linux, `fastdu-${hash}.cs`));
@@ -128,11 +124,24 @@ export async function windowsFolders(
   minBytes = 1e9,
 ): Promise<WindowsFolder[]> {
   if (drives.length === 0) return [];
-  const exe = await fastdu();
+  const walker = await fastdu();
   // One per core: they mostly wait on NTFS, and on all of C: 16 took 11.5 s
   // where 8 took 13.0 and 32 took 14.4 (2026-09-27).
-  const threads = availableParallelism();
-  const argv = [exe, String(depth), String(minBytes), String(threads), ...drives];
+  const threads = String(availableParallelism());
+  const argv = walker.release
+    ? [
+        walker.exe,
+        "-p",
+        "-d",
+        String(depth),
+        "-m",
+        String(minBytes),
+        "-j",
+        threads,
+        "--",
+        ...drives,
+      ]
+    : [walker.exe, String(depth), String(minBytes), threads, ...drives];
   let done = await runStreaming(argv, onProgress);
   // WSL could not start it at all (`run.ts`): it never ran, so once more.
   if (done.code !== 0 && interopFailed(done.errors)) {

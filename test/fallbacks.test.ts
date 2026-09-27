@@ -104,8 +104,8 @@ describe("Windows folders without fastdu", () => {
   });
 });
 
-describe("the Linux walk without its C build", () => {
-  test("fastdu cannot be built: the TypeScript walk measures the same tree, and why is said", async () => {
+describe("the Linux walk without fastdu", () => {
+  test("fastdu cannot be had: the TypeScript walk measures the same tree, and why is said", async () => {
     const root = mkdtempSync(join(tmpdir(), "disk-fallback-"));
     mkdirSync(join(root, "a"));
     writeFileSync(join(root, "a", "f.bin"), Buffer.alloc(100_000));
@@ -114,10 +114,10 @@ describe("the Linux walk without its C build", () => {
       () => undefined,
       2,
       async () => {
-        throw new Error("cc: not found");
+        throw new Error("downloading fastdu-linux-x64: HTTP 404");
       },
     );
-    expect(got.fellBack).toBe("cc: not found");
+    expect(got.fellBack).toBe("downloading fastdu-linux-x64: HTTP 404");
     expect(got.sizes.get(root)).toBeGreaterThan(100_000);
     expect(got.progress.files).toBe(1);
   });

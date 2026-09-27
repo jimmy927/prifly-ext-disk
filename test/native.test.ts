@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { linkSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fastduBinary, linuxAsset } from "../scan/fastdu-release";
 import { nativeWalk } from "../scan/linux/fastdu";
 import { run } from "../scan/run";
 import { walk } from "../scan/walk";
@@ -23,6 +24,27 @@ function tree(): string {
 async function du(path: string): Promise<number> {
   return Number((await run(["du", "-sx", "--block-size=1", path])).split("\t")[0]);
 }
+
+describe("fastdu's release", () => {
+  test("a download that is not the pinned build is refused, and not kept", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "disk-release-")), "fastdu");
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("not fastdu")) as unknown as typeof fetch;
+    try {
+      await expect(fastduBinary("fastdu-linux-x64", path)).rejects.toThrow("checksum");
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test("a system or processor without a build gets none", () => {
+    expect(linuxAsset("x64", "linux")).toBe("fastdu-linux-x64");
+    expect(linuxAsset("arm64", "linux")).toBe("fastdu-linux-arm64");
+    expect(linuxAsset("riscv64", "linux")).toBeNull();
+    expect(linuxAsset("arm64", "darwin")).toBeNull();
+  });
+});
 
 describe("fastdu in C, on Linux", () => {
   test("totals are du's to the byte, hard links once, on one thread and on many", async () => {
