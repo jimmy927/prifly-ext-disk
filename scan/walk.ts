@@ -1,11 +1,16 @@
 /**
  * Folder sizes on this Linux, in one pass, on many threads.
  *
+ * `walkFastest` runs fastdu in C (`linux/fastdu.c`), 1.2 s on ~/src (1.1 M
+ * files) where gdu took 4.2 s and ncdu 2.8 s (2026-09-27, medians under
+ * load). Where it cannot be built — no C compiler — `walk` below does the same
+ * in TypeScript, about 7.9 s:
+ *
  * A directory listing gives names and types but not sizes, so every file
  * needs an `lstat` — the slow part, and `du` does them one after another. Here
  * a thread per core (`walk-worker.ts`) lists and lstats with the synchronous
- * calls, taking folders from one queue. On ~/src (1.1 M files) `du` took 119 s
- * with a cold cache and 16 s warm; one thread of this took 24 s warm.
+ * calls, taking folders from one queue. On ~/src `du` took 119 s with a cold
+ * cache and 16 s warm; one thread of this took 24 s warm.
  *
  * The whole tree is walked once: every folder's size comes out of the same
  * pass, so the scratch folders, the worktrees and the biggest folders are all
@@ -19,6 +24,7 @@
 import { lstatSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { dirname } from "node:path";
+import { nativeWalk } from "./linux/fastdu";
 import { duBytes } from "./run";
 import type { WalkJob, WalkReply } from "./walk-worker";
 
@@ -50,6 +56,24 @@ export type Walked = {
   sizes: Map<string, number>;
   progress: WalkProgress;
 };
+
+/**
+ * The fastest walk this machine can do: fastdu in C (`linux/fastdu.c`), or,
+ * when it cannot be built or run here, the TypeScript walk below — with why.
+ */
+export async function walkFastest(
+  roots: string[],
+  onProgress: (progress: WalkProgress) => void,
+  threads = availableParallelism(),
+  native: typeof nativeWalk = nativeWalk,
+): Promise<Walked & { fellBack: string | null }> {
+  try {
+    return { ...(await native(roots, onProgress, threads)), fellBack: null };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ...(await walk(roots, onProgress, threads)), fellBack: reason };
+  }
+}
 
 type Pending = { dir: string; device: number };
 

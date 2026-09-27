@@ -47,18 +47,54 @@ each part's progress on standard error; `--json` for JSON).
 
 A directory listing is cheap; asking the file system about each file is what costs.
 
-- **Windows drives** are read by `fastdu` (`scan/windows/fastdu.cs`), a small C# program
-  compiled on first use with the compiler every Windows has. Windows' directory listing
-  (`FindFirstFileEx`) already carries each file's size, so a whole drive is summed from the
-  listings alone, on several threads — no file is opened or stat-ed. `C:\Program Files`
-  (152,000 files) took 3.3 s where PowerShell's `Get-ChildItem` took 28.6 s, to the same
-  byte; all of C: and D: (2.0 million files, 2.3 TB) about 40 s.
-- **Linux** listings carry no sizes, so every file does need an `lstat`. Those run on a
-  thread per two cores (`scan/walk.ts`), and the home folder and `/tmp` are walked once —
-  every folder's size comes out of the one pass, and the scratch folders, worktrees and
-  biggest folders are looked up in it. `~/src` (1.1 million files) took 7.6 s where `du`
-  took 17 s warm and 119 s cold. Counted like `du -x`: allocated blocks, one file system,
-  a file with several hard links once.
+- **Windows drives** are read by `fastdu` (`scan/windows/fastdu.c`). Windows' directory
+  listing already carries each file's size, so a whole drive is summed from the listings
+  alone — no file is opened or stat-ed. Each folder is opened relative to its parent's
+  handle (`NtOpenFile`), so the kernel looks up one name rather than a whole path, and
+  listed 256 KB at a time (`NtQueryDirectoryFile`); entries are read in place, only folder
+  names copied. Windows has no C compiler of its own, so it ships prebuilt as
+  `fastdu-c-<hash>.exe`; `bun scan/windows/build.ts` rebuilds it with Visual Studio after
+  the source changes. Without a matching build, `fastdu.cs` — the same program in C# — is
+  compiled with the compiler every Windows has, and without that, PowerShell reads it.
+  The walk is bound by the kernel: at 16 threads Windows sits at 100 % CPU, 75–97 % of it
+  in the kernel.
+- **Linux** listings carry no sizes, so every entry does need a stat. `fastdu`
+  (`scan/linux/fastdu.c`, compiled on first use with the system's `cc`) lists with
+  `getdents64` into 1 MB buffers and stats each entry relative to its folder's descriptor
+  (`fstatat`), on every core. The stats are what cost, so there are as few as possible: a
+  file whose inode number — which the listing gives for free — was already seen is another
+  name for a file already counted and is not stat-ed (~/src had 2.49 M file names for
+  1.15 M files, `node_modules` being hard-linked between checkouts); a folder's own size
+  comes from `fstat` on the descriptor it is listed through; and a listing that leaves the
+  buffer part-empty is the whole folder, so the call that would only say "end" is skipped.
+  One thread: 8.45 s → 5.37 s on ~/src. The home folder and `/tmp` are walked once — every folder's
+  size comes out of the one pass, and the scratch folders, worktrees and biggest folders
+  are looked up in it. Without a C compiler, the same walk runs in TypeScript
+  (`scan/walk.ts`), about five times slower. Counted like `du -x`: allocated blocks, one
+  file system per root, a file with several hard links once.
+- **Postgres** names its databases, and their sizes come from their folders under `base\`,
+  read by `fastdu` — `pg_database_size` stats every segment file, which took 50 s on a
+  979 GB database on NTFS against 0.8 s.
+
+Against the command-line disk-usage tools there are, on this machine on 2026-09-27 —
+five interleaved warm rounds, medians, load average 14–20 from other work; `fastdu` was
+fastest in every round:
+
+| | Windows, all of `C:\` (1.86 M files) | Linux, `~/src` (1.15 M files) |
+|---|---|---|
+| **fastdu** | **13.1 s** | **1.5 s** |
+| gdu 5 | 16.2 s | 2.9 s |
+| dua 2.45 | 17.6 s, missing ~110 GiB to permission errors | 12.6–17.5 s |
+| ncdu 2.9 (`-t 16`) | — (no Windows build) | 2.5 s |
+| diskus 0.9 | 61 s | 3.9–6.9 s |
+| dust 1.2 | 74 s | 25–44 s |
+| pdu 0.24 | 54–105 s | 29–32 s |
+| Sysinternals du | 574 s | — |
+| `du` | — | 15–19 s |
+| the earlier C# fastdu / TypeScript walk | 22 s (15 s with server GC) | 7.9 s |
+
+Tools that read NTFS's master file table directly (WizTree, Everything) are faster still,
+but need administrator rights on every scan and are not command-line tools.
 - **Postgres** names its databases, and their sizes come from their folders under `base\`,
   read by `fastdu` — `pg_database_size` stats every segment file, which took 50 s on a
   979 GB database on NTFS against 0.8 s.

@@ -20,7 +20,7 @@ import { onWsl } from "./run";
 import { readScratch, scratchFindings } from "./scratch";
 import { type Running, readRunning } from "./sessions";
 import type { Candidate, Drive, Scan, SessionInfo, Usage } from "./types";
-import { type Sizer, sizerOf, walk } from "./walk";
+import { type Sizer, sizerOf, walkFastest } from "./walk";
 import { windowsFolders } from "./windows/fastdu";
 import { windowsFoldersOrSlow } from "./windows/slowdu";
 import { defaultRoots, findRepos, readWorktrees, worktreeCandidates } from "./worktrees";
@@ -61,12 +61,18 @@ function isDockerData(image: DiskImage): boolean {
 async function linux(ctx: Context): Promise<{ found: Found; size: Sizer }> {
   const roots = [homedir(), "/tmp"];
   const walked = await ctx.progress.run("Linux folders", ctx.notes, async () => {
-    const result = await walk(roots, (p) =>
+    const result = await walkFastest(roots, (p) =>
       ctx.progress.update("Linux folders", counted(p.files, bytes(p.bytes))),
     );
+    if (result.fellBack !== null) {
+      ctx.notes.push(
+        `linux folders: fastdu failed (${result.fellBack}); walked in TypeScript instead`,
+      );
+    }
+    const slow = result.fellBack === null ? "" : " · TypeScript, slower";
     return {
       value: result,
-      detail: counted(result.progress.files, bytes(result.progress.bytes)),
+      detail: `${counted(result.progress.files, bytes(result.progress.bytes))}${slow}`,
     };
   });
   const sizes = walked?.sizes ?? new Map<string, number>();
@@ -83,21 +89,22 @@ async function windows(ctx: Context): Promise<Found> {
     return NOTHING;
   }
   const folders = await ctx.progress.run("Windows folders", ctx.notes, async () => {
-    let last = { files: 0, bytes: 0 };
     let slow = "";
     const { folders: found } = await windowsFoldersOrSlow(
       letters,
-      (p) => {
-        last = p;
-        ctx.progress.update("Windows folders", `${counted(p.files, bytes(p.bytes))}${slow}`);
-      },
+      (p) => ctx.progress.update("Windows folders", `${counted(p.files, bytes(p.bytes))}${slow}`),
       (reason) => {
         slow = " · PowerShell, slower";
         ctx.progress.update("Windows folders", `fastdu failed, reading with PowerShell${slow}`);
         ctx.notes.push(`windows folders: fastdu failed (${reason}); read with PowerShell instead`);
       },
     );
-    return { value: found, detail: `${counted(last.files, bytes(last.bytes))}${slow}` };
+    // The drives' own totals: the last progress tick can be up to a second old
+    // (it said 1,868,787 files where C: and D: had 2,063,329 on 2026-09-27).
+    const drives = found.filter((folder) => folder.depth === 0);
+    const files = drives.reduce((sum, folder) => sum + folder.files, 0);
+    const total = drives.reduce((sum, folder) => sum + folder.bytes, 0);
+    return { value: found, detail: `${counted(files, bytes(total))}${slow}` };
   });
   return { usage: windowsUsage(folders ?? []), candidates: [] };
 }

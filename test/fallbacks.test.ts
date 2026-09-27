@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseSizes } from "../scan/linux/fastdu";
 import { readDatabases } from "../scan/postgres";
 import { gateOnLiveness } from "../scan/scan";
 import { readRunning } from "../scan/sessions";
 import type { Candidate } from "../scan/types";
+import { walkFastest } from "../scan/walk";
 import { slowScript, windowsFoldersOrSlow } from "../scan/windows/slowdu";
 
 function candidate(kind: Candidate["kind"]): Candidate {
@@ -99,6 +101,33 @@ describe("Windows folders without fastdu", () => {
     expect(script).toContain('@("C:","D:")');
     expect(script).toContain("progress`t0`t$files`t$bytes");
     expect(script).toContain("-Attributes !ReparsePoint");
+  });
+});
+
+describe("the Linux walk without its C build", () => {
+  test("fastdu cannot be built: the TypeScript walk measures the same tree, and why is said", async () => {
+    const root = mkdtempSync(join(tmpdir(), "disk-fallback-"));
+    mkdirSync(join(root, "a"));
+    writeFileSync(join(root, "a", "f.bin"), Buffer.alloc(100_000));
+    const got = await walkFastest(
+      [root],
+      () => undefined,
+      2,
+      async () => {
+        throw new Error("cc: not found");
+      },
+    );
+    expect(got.fellBack).toBe("cc: not found");
+    expect(got.sizes.get(root)).toBeGreaterThan(100_000);
+    expect(got.progress.files).toBe(1);
+  });
+
+  test("the C walk's lines become sizes by path", () => {
+    const sizes = parseSizes(
+      "46611435520\t1148665\t/home/j/src\n7488593920\t294470\t/home/j/src/odi\n",
+    );
+    expect(sizes.get("/home/j/src/odi")).toBe(7488593920);
+    expect(sizes.size).toBe(2);
   });
 });
 
