@@ -14,9 +14,10 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { duBytes, run } from "./run";
+import { run } from "./run";
 import { inUse, isLive, type Running, scratchOwner, sessionsIn } from "./sessions";
 import type { Candidate, SessionInfo } from "./types";
+import type { Sizer } from "./walk";
 
 export type Worktree = {
   path: string;
@@ -141,10 +142,11 @@ export async function worktreeCandidates(
   sessions: SessionInfo[],
   running: Running,
   driveOf: (path: string) => string,
+  size: Sizer,
 ): Promise<Candidate[]> {
   const idle = trees.filter((tree) => !claimed(tree, sessions, running));
   const [sizes, states] = await Promise.all([
-    duBytes(idle.map((tree) => tree.path)),
+    size(idle.map((tree) => tree.path)),
     Promise.all(idle.map((tree) => treeState(tree).catch(() => null))),
   ]);
   const now = Date.now();

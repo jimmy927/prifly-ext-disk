@@ -21,8 +21,13 @@ import type { SessionInfo } from "./types";
 export const PRIFLY_DB = join(homedir(), ".local", "share", "prifly", "prifly.db");
 const PROCESS_FILES = join(homedir(), ".claude", "sessions");
 
-/** What is running now: session ids, and the folders any process works in. */
-export type Running = { ids: Set<string>; folders: string[] };
+/**
+ * What is running now: session ids, and the folders any process works in.
+ * `known` is false where that cannot be read — no `/proc`, as on macOS — and
+ * then nothing that depends on it may be offered for cleaning: every session
+ * would look ended, and a running one's folders would look safe to remove.
+ */
+export type Running = { ids: Set<string>; folders: string[]; known: boolean };
 
 /** prifly states whose process is gone; any other has one, idle or not. */
 const GONE = new Set(["ended", "unknown"]);
@@ -33,19 +38,19 @@ export function isLive(session: SessionInfo, running: Running): boolean {
 
 type ProcessFile = { pid: number; sessionId: string; cwd: string };
 
-async function runningIds(): Promise<Set<string>> {
+async function runningIds(proc: string, processFiles: string): Promise<Set<string>> {
   const ids = new Set<string>();
   let files: string[];
   try {
-    files = await readdir(PROCESS_FILES);
+    files = await readdir(processFiles);
   } catch {
     return ids;
   }
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const entry = JSON.parse(readFileSync(join(PROCESS_FILES, file), "utf8")) as ProcessFile;
-      if (existsSync(`/proc/${entry.pid}`)) ids.add(entry.sessionId);
+      const entry = JSON.parse(readFileSync(join(processFiles, file), "utf8")) as ProcessFile;
+      if (existsSync(`${proc}/${entry.pid}`)) ids.add(entry.sessionId);
     } catch {
       // Half written by a process starting up; the next scan reads it whole.
     }
@@ -54,12 +59,12 @@ async function runningIds(): Promise<Set<string>> {
 }
 
 /** The folders running processes work in. */
-async function processFolders(): Promise<string[]> {
+async function processFolders(proc: string): Promise<string[]> {
   const out = new Set<string>();
-  for (const pid of await readdir("/proc")) {
+  for (const pid of await readdir(proc)) {
     if (!/^\d+$/.test(pid)) continue;
     try {
-      out.add(await readlink(`/proc/${pid}/cwd`));
+      out.add(await readlink(`${proc}/${pid}/cwd`));
     } catch {
       // Ended between the listing and the read, or another user's.
     }
@@ -67,9 +72,14 @@ async function processFolders(): Promise<string[]> {
   return [...out];
 }
 
-export async function readRunning(): Promise<Running> {
-  const [ids, folders] = await Promise.all([runningIds(), processFolders()]);
-  return { ids, folders };
+/**
+ * The running sessions and processes, from `/proc`. Where there is none to
+ * read, the answer says it does not know rather than that nothing runs.
+ */
+export async function readRunning(proc = "/proc", processFiles = PROCESS_FILES): Promise<Running> {
+  if (!existsSync(`${proc}/self`)) return { ids: new Set(), folders: [], known: false };
+  const [ids, folders] = await Promise.all([runningIds(proc, processFiles), processFolders(proc)]);
+  return { ids, folders, known: true };
 }
 
 function openDb(dbPath: string): Database | null {

@@ -116,6 +116,41 @@ h2 {
   color: #e34948;
 }
 
+.parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 4px 16px;
+}
+.parts:empty {
+  display: none;
+}
+.part {
+  display: grid;
+  grid-template-columns: 16px 120px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--muted-fg);
+  font-size: 12px;
+}
+.part .name {
+  color: var(--fg);
+}
+.part .detail {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.part.running .mark {
+  color: var(--downtime);
+}
+.part.done .mark {
+  color: var(--safe);
+}
+.part.failed .mark,
+.part.failed .detail {
+  color: #e34948;
+}
 .drives {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));

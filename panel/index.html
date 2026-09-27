@@ -18,12 +18,17 @@
         <h1>Disk space</h1>
         <span class="grow"></span>
         <span class="status" id="status" aria-live="polite"></span>
-        <button type="button" class="btn" id="deep" title="Walks every Windows drive; takes minutes">
-          Read Windows folders
+        <button
+          type="button"
+          class="btn"
+          id="rescan"
+          title="Reads every drive again — Linux folders, Windows folders, disk images, Docker, worktrees — about a minute and a half"
+        >
+          Scan now
         </button>
-        <button type="button" class="btn" id="rescan">Scan again</button>
       </div>
       <p class="error" id="error" hidden></p>
+      <div class="parts" id="parts" aria-live="polite"></div>
       <section>
         <h2>Drives</h2>
         <div class="drives" id="drives"></div>

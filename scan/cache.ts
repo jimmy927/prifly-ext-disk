@@ -5,14 +5,12 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Scan, SessionInfo, Usage } from "./types";
+import type { Scan, SessionInfo } from "./types";
 
 export type Cached = {
   scan: Scan;
   /** The sessions the scan judged by, archived marks included. */
   sessions: SessionInfo[];
-  /** The Windows folder sizes from the last deep scan. */
-  windows: { at: number; usage: Usage[] } | null;
 };
 
 function cacheFile(folder: string): string {

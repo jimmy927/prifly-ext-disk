@@ -243,18 +243,48 @@ function drawCandidates(scan) {
   $("notes").replaceChildren(...scan.notes.map((note) => el("li", {}, `Not read — ${note}`)));
 }
 
+const PART_MARK = { waiting: "○", running: "◐", done: "✓", failed: "✕", skipped: "–" };
+
+function seconds(ms) {
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+}
+
+/** One row per part of the running scan: what it has counted so far, and for how long. */
+function drawParts(state) {
+  if (!state.scanning || state.parts.length === 0) {
+    $("parts").replaceChildren();
+    return;
+  }
+  $("parts").replaceChildren(
+    ...state.parts.map((part) => {
+      const time =
+        part.state === "running"
+          ? seconds(Date.now() - part.startedAt)
+          : part.state === "done" || part.state === "failed"
+            ? seconds(part.ms)
+            : "";
+      return el(
+        "div",
+        { class: `part ${part.state}` },
+        el("span", { class: "mark" }, PART_MARK[part.state]),
+        el("span", { class: "name" }, part.name),
+        el("span", { class: "detail" }, part.state === "waiting" ? "waiting" : part.detail),
+        el("span", { class: "time" }, time),
+      );
+    }),
+  );
+}
+
 function drawStatus(state) {
-  const parts = [];
-  if (state.scanning) parts.push("Scanning…");
-  else if (state.scan)
-    parts.push(`Scanned ${ago(state.scan.at)} (${Math.round(state.scan.took / 1000)} s)`);
-  if (state.deepScanning) parts.push("reading Windows folders…");
-  else if (state.windowsAt > 0) parts.push(`Windows folders read ${ago(state.windowsAt)}`);
-  $("status").textContent = parts.join(" · ");
+  $("status").textContent = state.scanning
+    ? "Scanning…"
+    : state.scan
+      ? `Scanned ${ago(state.scan.at)}, in ${seconds(state.scan.took)}`
+      : "";
   $("rescan").disabled = state.scanning;
-  $("deep").disabled = state.deepScanning;
   $("error").hidden = state.error === "";
   $("error").textContent = state.error;
+  drawParts(state);
 }
 
 function draw(state) {
@@ -282,9 +312,10 @@ async function refresh(path = "status") {
   try {
     const state = await call(path);
     draw(state);
-    const busy = state.scanning || state.deepScanning;
     clearTimeout(polling);
-    if (busy) polling = setTimeout(() => void refresh(), 3000);
+    // Every second while a scan runs, so its counts move; the scan's result
+    // replaces the page once it is over.
+    if (state.scanning) polling = setTimeout(() => void refresh(), 1000);
   } catch (error) {
     $("error").hidden = false;
     $("error").textContent = String(error.message ?? error);
@@ -292,7 +323,6 @@ async function refresh(path = "status") {
 }
 
 $("rescan").addEventListener("click", () => void refresh("rescan"));
-$("deep").addEventListener("click", () => void refresh("deep"));
 
 const LOOK = {
   "--background": "--bg",

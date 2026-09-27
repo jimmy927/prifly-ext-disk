@@ -37,10 +37,44 @@ Your own data (games, Documents, Steam) shows under what takes the space but is 
 works in — its folder, its scratch folder, worktrees inside it — is offered, and neither are
 locked worktrees (a sub-agent is in them).
 
-The scan runs at start and every half hour, in the background; the window's **Scan again**
-starts one. **Read Windows folders** walks each Windows drive's top-level folders, which
-takes minutes on large drives, and is kept until you read again. `disk-scan` prints the last
-scan in a session (`--fresh` scans now, `--json` for JSON).
+The scan runs at start and every half hour, in the background, and **Scan now** in the
+window starts one; while it runs, the window shows each part — Linux folders, Windows
+folders, disk images, Docker, databases, scratch folders, worktrees — with what it has
+counted so far. `disk-scan` prints the last scan in a session (`--fresh` scans now, with
+each part's progress on standard error; `--json` for JSON).
+
+## How it reads sizes fast
+
+A directory listing is cheap; asking the file system about each file is what costs.
+
+- **Windows drives** are read by `fastdu` (`scan/windows/fastdu.cs`), a small C# program
+  compiled on first use with the compiler every Windows has. Windows' directory listing
+  (`FindFirstFileEx`) already carries each file's size, so a whole drive is summed from the
+  listings alone, on several threads — no file is opened or stat-ed. `C:\Program Files`
+  (152,000 files) took 3.3 s where PowerShell's `Get-ChildItem` took 28.6 s, to the same
+  byte; all of C: and D: (2.0 million files, 2.3 TB) about 40 s.
+- **Linux** listings carry no sizes, so every file does need an `lstat`. Those run on a
+  thread per two cores (`scan/walk.ts`), and the home folder and `/tmp` are walked once —
+  every folder's size comes out of the one pass, and the scratch folders, worktrees and
+  biggest folders are looked up in it. `~/src` (1.1 million files) took 7.6 s where `du`
+  took 17 s warm and 119 s cold. Counted like `du -x`: allocated blocks, one file system,
+  a file with several hard links once.
+- **Postgres** names its databases, and their sizes come from their folders under `base\`,
+  read by `fastdu` — `pg_database_size` stats every segment file, which took 50 s on a
+  979 GB database on NTFS against 0.8 s.
+
+A full scan of this machine — 4.2 million files on Linux, 2.0 million on Windows — takes
+about a minute and a half.
+
+When the fast way fails, the slow one stands in and the part says so: PowerShell's
+`Get-ChildItem` for the Windows folders when `fastdu` cannot be built or started, and
+`pg_database_size` for the databases when their folders cannot be read. macOS runs the
+Linux walk for now; a `getattrlistbulk` scanner, its equivalent of `fastdu`, can come later.
+
+**Where running sessions cannot be read** — no `/proc`, as on macOS — no scratch folder or
+worktree is offered for cleaning: every session would look ended, and a running one's
+folders would look safe to remove. They are still counted; Docker's cache, disk images and
+databases, which do not depend on sessions, are still offered.
 
 ## Settings
 

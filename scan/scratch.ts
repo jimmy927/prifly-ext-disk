@@ -8,9 +8,9 @@
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { duBytes } from "./run";
 import { inUse, isLive, type Running } from "./sessions";
 import type { Candidate, SessionInfo, Usage } from "./types";
+import type { Sizer } from "./walk";
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -45,9 +45,9 @@ async function sessionFolders(root: string): Promise<string[]> {
 
 export type ScratchFolder = { path: string; bytes: number; session: SessionInfo | null };
 
-export async function readScratch(sessions: SessionInfo[]): Promise<ScratchFolder[]> {
+export async function readScratch(sessions: SessionInfo[], size: Sizer): Promise<ScratchFolder[]> {
   const folders = await sessionFolders(scratchRoot());
-  const sizes = await duBytes(folders);
+  const sizes = await size(folders);
   const byId = new Map(sessions.map((session) => [session.id, session]));
   return folders.map((path) => ({
     path,

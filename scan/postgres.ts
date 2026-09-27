@@ -32,27 +32,68 @@ function psql(config: PostgresConfig, sql: string): Promise<string> {
       "-Atc",
       sql,
     ],
-    60_000,
+    // pg_database_size lists every file of every database: a terabyte of
+    // them on a drive other things are reading takes a while.
+    180_000,
   );
 }
 
-export async function readDatabases(
-  config: PostgresConfig,
-): Promise<{ dataDirectory: string; databases: DatabaseSize[] }> {
-  const rows = await psql(
-    config,
-    "select datname, pg_database_size(datname) from pg_database where not datistemplate order by 2 desc",
-  );
-  const dataDirectory = (await psql(config, "show data_directory")).trim();
-  const databases = rows
+/** `a|b` rows from psql -At. */
+function rows(out: string): string[][] {
+  return out
     .trim()
     .split("\n")
     .filter((line) => line.includes("|"))
-    .map((line) => {
-      const [name = "", bytes = "0"] = line.split("|");
-      return { name, bytes: Number(bytes) };
-    });
-  return { dataDirectory, databases };
+    .map((line) => line.split("|"));
+}
+
+/** Each database's folder under `base\`, by its oid, from the directory listings. */
+export type FolderSizes = (windowsPath: string) => Promise<Map<string, number>>;
+
+/** A query's rows as psql -At prints them; `psql` bound to a config. */
+export type Query = (sql: string) => Promise<string>;
+
+export function queryOf(config: PostgresConfig): Query {
+  return (sql) => psql(config, sql);
+}
+
+/**
+ * The databases and their sizes. Postgres names them; their sizes come from
+ * `base/<oid>` in the data folder. On a Windows drive that folder is read with
+ * `fastdu` from the directory listings (`sizeOnWindows`): `pg_database_size`
+ * stats every segment file, and on NTFS that took 50 s for a 979 GB database
+ * on 2026-09-27. Anywhere else — or when reading the folder fails, whose
+ * reason comes back as `fellBack` — Postgres is asked.
+ */
+export async function readDatabases(
+  query: Query,
+  sizeOnWindows: FolderSizes | null,
+): Promise<{ dataDirectory: string; databases: DatabaseSize[]; fellBack: string | null }> {
+  const dataDirectory = (await query("show data_directory")).trim();
+  const onWindows = /^[A-Za-z]:[\\/]/.test(dataDirectory);
+  let fellBack: string | null = null;
+  if (onWindows && sizeOnWindows !== null) {
+    const list = rows(await query("select oid, datname from pg_database where not datistemplate"));
+    try {
+      const sizes = await sizeOnWindows(`${dataDirectory.replaceAll("/", "\\")}\\base`);
+      const databases = list
+        .map(([oid = "", name = ""]) => ({ name, bytes: sizes.get(oid) ?? 0 }))
+        .sort((a, b) => b.bytes - a.bytes);
+      return { dataDirectory, databases, fellBack };
+    } catch (error) {
+      fellBack = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const sized = rows(
+    await query(
+      "select datname, pg_database_size(datname) from pg_database where not datistemplate order by 2 desc",
+    ),
+  );
+  return {
+    dataDirectory,
+    databases: sized.map(([name = "", bytes = "0"]) => ({ name, bytes: Number(bytes) })),
+    fellBack,
+  };
 }
 
 /** Every `.env` in these folders, as text. */

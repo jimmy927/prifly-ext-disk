@@ -18,7 +18,7 @@ const DF = `Mounted on        1B-blocks          Used        Avail
 /usr/lib/wsl/drivers 1002832572416 747054235648 255778336768
 `;
 
-const nobody: Running = { ids: new Set(), folders: [] };
+const nobody: Running = { ids: new Set(), folders: [], known: true };
 
 function session(over: Partial<SessionInfo>): SessionInfo {
   return { id: "s1", title: "t", cwd: "/x", state: "ended", archived: false, ...over };
@@ -106,7 +106,7 @@ describe("sessions and scratch folders", () => {
   });
 
   test("a session is live when its process runs, whatever prifly last said", () => {
-    const running: Running = { ids: new Set(["s1"]), folders: [] };
+    const running: Running = { ids: new Set(["s1"]), folders: [], known: true };
     expect(isLive(session({ state: "ended" }), running)).toBe(true);
     expect(isLive(session({ state: "ended" }), nobody)).toBe(false);
     expect(isLive(session({ state: "waiting" }), nobody)).toBe(true);
@@ -119,7 +119,7 @@ describe("sessions and scratch folders", () => {
       bytes: 1e9,
       session: session({ id: id(n), archived: n === 1 }),
     }));
-    const running: Running = { ids: new Set([id(3)]), folders: [] };
+    const running: Running = { ids: new Set([id(3)]), folders: [], known: true };
     const { candidates, usage } = scratchFindings(folders, running, "WSL");
     expect(candidates.map((c) => c.safety)).toEqual(["safe", "check"]);
     expect(usage.bytes).toBe(3e9);

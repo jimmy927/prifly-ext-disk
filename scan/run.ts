@@ -11,8 +11,28 @@ export function onWsl(): boolean {
 
 export class CommandFailed extends Error {}
 
+/**
+ * WSL failing to start a Windows program at all — the interop socket not
+ * answering, seen when several start at once on a busy machine (2026-09-27:
+ * `UtilAcceptVsock:273: accept4 failed 110` from cmd.exe). The program never
+ * ran, so starting it again is safe.
+ */
+export function interopFailed(message: string): boolean {
+  return message.includes("UtilAcceptVsock");
+}
+
 /** A program's standard output; a non-zero exit or a timeout throws `CommandFailed`. */
 export async function run(argv: string[], timeoutMs = 120_000, cwd?: string): Promise<string> {
+  try {
+    return await runOnce(argv, timeoutMs, cwd);
+  } catch (error) {
+    if (!(error instanceof CommandFailed) || !interopFailed(error.message)) throw error;
+    await Bun.sleep(1000);
+    return runOnce(argv, timeoutMs, cwd);
+  }
+}
+
+async function runOnce(argv: string[], timeoutMs: number, cwd?: string): Promise<string> {
   const proc = Bun.spawn(argv, {
     stdout: "pipe",
     stderr: "pipe",

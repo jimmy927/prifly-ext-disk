@@ -4,11 +4,11 @@
  * and handed to the `disk-cleanup` skill, which asks the reader what to clean
  * and does it.
  *
- * A scan runs at start and every half hour, and on demand from the window.
- * Its result is kept in `cache/scan.json`, with the sessions it judged by, so
- * `bin/disk-scan` — what the skill runs — answers at once and judges sessions
- * the same way; a scan it writes is taken up here too. The Windows folder
- * sizes take minutes to read, so they are read only when the window asks.
+ * A scan runs at start and every half hour, and on demand from the window,
+ * whose progress it shows part by part while it runs. Its result is kept in
+ * `cache/scan.json`, with the sessions it judged by, so `bin/disk-scan` — what
+ * the skill runs — answers at once and judges sessions the same way; a scan
+ * it writes is taken up here too.
  *
  * The window's Clean up buttons start a session each, in a window of its own
  * (prifly's `prifly-launch`), through `launch` with the candidate's id or a
@@ -19,12 +19,12 @@ import { homedir } from "node:os";
 import type { Decoration, ExtensionApi, Launch, LaunchChoice, PanelRequest } from "./prifly-api";
 import { readCache, writeCache } from "./scan/cache";
 import { readConfig } from "./scan/config";
-import { windowsFolders } from "./scan/folders";
 import { summary } from "./scan/format";
+import type { Part } from "./scan/progress";
 import { cleanupPrompt } from "./scan/prompt";
 import { scan } from "./scan/scan";
 import { isLive, readArchived, withArchived } from "./scan/sessions";
-import type { Scan, Usage } from "./scan/types";
+import type { Scan } from "./scan/types";
 
 const EVERY = 30 * 60_000;
 /** How often the cleanup sessions this started are looked at, to rescan when one ends. */
@@ -34,8 +34,8 @@ type State = {
   api: ExtensionApi;
   last: Scan | null;
   running: Promise<Scan> | null;
-  windows: { at: number; usage: Usage[] } | null;
-  deep: Promise<void> | null;
+  /** The running scan's parts, as far as each has got; the last scan's once it is over. */
+  parts: Part[];
   error: string;
   /** The cleanup sessions started from here that were still running when last looked at. */
   cleanups: Set<string>;
@@ -50,15 +50,13 @@ function sessions(api: ExtensionApi) {
 function rescan(current: State): Promise<Scan> {
   if (current.running !== null) return current.running;
   const info = sessions(current.api);
-  current.running = scan({
-    sessions: info,
-    config: readConfig(current.api.folder),
-    windowsFolders: current.windows?.usage ?? [],
+  current.running = scan({ sessions: info, config: readConfig(current.api.folder) }, (parts) => {
+    current.parts = parts;
   })
     .then((result) => {
       current.last = result;
       current.error = "";
-      writeCache(current.api.folder, { scan: result, sessions: info, windows: current.windows });
+      writeCache(current.api.folder, { scan: result, sessions: info });
       current.api.show({}, chips(result));
       current.api.log("scanned", { took: result.took, candidates: result.candidates.length });
       return result;
@@ -72,22 +70,6 @@ function rescan(current: State): Promise<Scan> {
       current.running = null;
     });
   return current.running;
-}
-
-function deepScan(current: State): Promise<void> {
-  if (current.deep !== null) return current.deep;
-  const letters = (current.last?.drives ?? [])
-    .map((drive) => drive.label)
-    .filter((label) => /^[A-Z]:$/.test(label));
-  current.deep = windowsFolders(letters)
-    .then(async (usage) => {
-      current.windows = { at: Date.now(), usage };
-      await rescan(current);
-    })
-    .finally(() => {
-      current.deep = null;
-    });
-  return current.deep;
 }
 
 /** One chip for the status bar: free space on every drive, warning when one runs low. */
@@ -110,7 +92,8 @@ export function chips(result: Scan): Decoration[] {
 /** A cleanup session that has ended is what the drives look like now: scan again. */
 function watchCleanups(current: State): void {
   if (current.cleanups.size === 0) return;
-  const nobody = { ids: new Set<string>(), folders: [] };
+  // Judged by prifly's own states alone: it knows its sessions whatever the system.
+  const nobody = { ids: new Set<string>(), folders: [], known: true };
   const live = new Set(
     sessions(current.api)
       .filter((session) => isLive(session, nobody))
@@ -129,8 +112,7 @@ export function activate(api: ExtensionApi): () => void {
     api,
     last: cached?.scan ?? null,
     running: null,
-    windows: cached?.windows ?? null,
-    deep: null,
+    parts: [],
     error: "",
     cleanups: new Set(),
   };
@@ -160,8 +142,7 @@ function status(current: State) {
   return {
     scan: current.last,
     scanning: current.running !== null,
-    deepScanning: current.deep !== null,
-    windowsAt: current.windows?.at ?? 0,
+    parts: current.parts,
     error: current.error,
   };
 }
@@ -174,11 +155,6 @@ export async function panel(_panelId: string, request: PanelRequest): Promise<un
       return status(current);
     case "rescan":
       void rescan(current).catch(() => undefined);
-      return status(current);
-    case "deep":
-      void deepScan(current).catch((error: unknown) => {
-        current.error = error instanceof Error ? error.message : String(error);
-      });
       return status(current);
     default:
       throw new Error(`No such request: ${request.path}`);

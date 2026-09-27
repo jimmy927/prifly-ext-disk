@@ -1,115 +1,260 @@
 /**
- * One scan: every reader, each on its own, so a machine without Docker or
- * Postgres still gets the rest. What a reader could not do becomes a note.
+ * One scan, in named parts that run side by side and report as they go
+ * (`progress.ts`). Each part stands on its own, so a machine without Docker,
+ * Windows or Postgres still gets the rest; what a part could not do becomes a
+ * note. The two walks — this Linux's folders (`walk.ts`) and the Windows
+ * drives' (`windows/fastdu.ts`) — are the long ones; the scratch folders and
+ * worktrees are looked up in the Linux walk rather than walked again.
  */
 
 import { homedir } from "node:os";
 import type { Config } from "./config";
 import { dockerCandidates, readDocker } from "./docker";
 import { driveOf, readDrives } from "./drives";
-import { linuxFolders } from "./folders";
+import { linuxFolders, windowsUsage } from "./folders";
+import { bytes } from "./format";
 import { type DiskImage, imageFindings, readImages } from "./images";
-import { databaseFindings, envTexts, readDatabases } from "./postgres";
+import { databaseFindings, envTexts, queryOf, readDatabases } from "./postgres";
+import { counted, type Part, Progress } from "./progress";
 import { onWsl } from "./run";
 import { readScratch, scratchFindings } from "./scratch";
-import { readRunning } from "./sessions";
+import { type Running, readRunning } from "./sessions";
 import type { Candidate, Drive, Scan, SessionInfo, Usage } from "./types";
+import { type Sizer, sizerOf, walk } from "./walk";
+import { windowsFolders } from "./windows/fastdu";
+import { windowsFoldersOrSlow } from "./windows/slowdu";
 import { defaultRoots, findRepos, readWorktrees, worktreeCandidates } from "./worktrees";
 
-export type ScanInput = {
-  sessions: SessionInfo[];
-  config: Config;
-  /** The Windows folder sizes from the last deep scan, kept because they take minutes. */
-  windowsFolders: Usage[];
-};
+export type ScanInput = { sessions: SessionInfo[]; config: Config };
+
+export const PARTS = [
+  "Drives",
+  "Linux folders",
+  "Windows folders",
+  "Disk images",
+  "Docker",
+  "Scratch folders",
+  "Worktrees",
+  "Databases",
+] as const;
 
 type Found = { usage: Usage[]; candidates: Candidate[] };
+const NOTHING: Found = { usage: [], candidates: [] };
 
-async function attempt(name: string, notes: string[], read: () => Promise<Found>): Promise<Found> {
-  try {
-    return await read();
-  } catch (error) {
-    notes.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
-    return { usage: [], candidates: [] };
-  }
-}
+/** What every part can see. */
+type Context = {
+  input: ScanInput;
+  progress: Progress;
+  notes: string[];
+  drives: Drive[];
+  on: (path: string) => string;
+  running: Running;
+  roots: string[];
+  wsl: boolean;
+};
 
 function isDockerData(image: DiskImage): boolean {
   return image.path.toLowerCase().endsWith("docker_data.vhdx");
 }
 
-function images(list: DiskImage[], drives: Drive[], dockerBytes: number | null): Found {
-  const found: Found = { usage: [], candidates: [] };
+/** This Linux's home folder and /tmp, walked once; the sizes serve the parts after it. */
+async function linux(ctx: Context): Promise<{ found: Found; size: Sizer }> {
+  const roots = [homedir(), "/tmp"];
+  const walked = await ctx.progress.run("Linux folders", ctx.notes, async () => {
+    const result = await walk(roots, (p) =>
+      ctx.progress.update("Linux folders", counted(p.files, bytes(p.bytes))),
+    );
+    return {
+      value: result,
+      detail: counted(result.progress.files, bytes(result.progress.bytes)),
+    };
+  });
+  const sizes = walked?.sizes ?? new Map<string, number>();
+  return {
+    found: { usage: linuxFolders(sizes, roots, ctx.on), candidates: [] },
+    size: sizerOf(sizes),
+  };
+}
+
+async function windows(ctx: Context): Promise<Found> {
+  const letters = ctx.drives.map((drive) => drive.label).filter((label) => /^[A-Z]:$/.test(label));
+  if (!ctx.wsl || letters.length === 0) {
+    ctx.progress.finish("Windows folders", "skipped", "no Windows drives here");
+    return NOTHING;
+  }
+  const folders = await ctx.progress.run("Windows folders", ctx.notes, async () => {
+    let last = { files: 0, bytes: 0 };
+    let slow = "";
+    const { folders: found } = await windowsFoldersOrSlow(
+      letters,
+      (p) => {
+        last = p;
+        ctx.progress.update("Windows folders", `${counted(p.files, bytes(p.bytes))}${slow}`);
+      },
+      (reason) => {
+        slow = " · PowerShell, slower";
+        ctx.progress.update("Windows folders", `fastdu failed, reading with PowerShell${slow}`);
+        ctx.notes.push(`windows folders: fastdu failed (${reason}); read with PowerShell instead`);
+      },
+    );
+    return { value: found, detail: `${counted(last.files, bytes(last.bytes))}${slow}` };
+  });
+  return { usage: windowsUsage(folders ?? []), candidates: [] };
+}
+
+/** The WSL and Docker disk images, then Docker, which is measured against its image. */
+async function imagesAndDocker(ctx: Context): Promise<Found> {
+  const list =
+    (ctx.wsl
+      ? await ctx.progress.run("Disk images", ctx.notes, async () => {
+          const found = await readImages();
+          return { value: found, detail: `${found.length} found` };
+        })
+      : null) ?? [];
+  if (!ctx.wsl) ctx.progress.finish("Disk images", "skipped", "not under WSL");
+  const dockerImage = list.find(isDockerData);
+  const drive = dockerImage === undefined ? ctx.on("/") : ctx.on(dockerImage.path);
+  const df = await ctx.progress.run("Docker", ctx.notes, async () => {
+    const read = await readDocker();
+    return { value: read, detail: `${bytes(read.totalBytes)} in images, volumes and cache` };
+  });
+  const found: Found = { usage: [], candidates: df === null ? [] : dockerCandidates(df, drive) };
   const own = process.env["WSL_DISTRO_NAME"];
-  const rootUsed = drives.find((drive) => drive.mount === "/")?.usedBytes ?? null;
+  const rootUsed = ctx.drives.find((each) => each.mount === "/")?.usedBytes ?? null;
   for (const image of list) {
     let inside: number | null = null;
-    if (isDockerData(image)) inside = dockerBytes;
+    if (isDockerData(image)) inside = df?.totalBytes ?? null;
     else if (image.distro === own) inside = rootUsed;
-    const { usage, candidate } = imageFindings(image, inside, driveOf(image.path, drives));
+    const { usage, candidate } = imageFindings(image, inside, ctx.on(image.path));
     found.usage.push(usage);
     if (candidate !== null) found.candidates.push(candidate);
   }
   return found;
 }
 
-async function docker(
-  drive: string,
-  notes: string[],
-): Promise<{ found: Found; totalBytes: number | null }> {
-  try {
-    const df = await readDocker();
-    return {
-      found: { usage: [], candidates: dockerCandidates(df, drive) },
-      totalBytes: df.totalBytes,
-    };
-  } catch (error) {
-    notes.push(`docker: ${error instanceof Error ? error.message : String(error)}`);
-    return { found: { usage: [], candidates: [] }, totalBytes: null };
-  }
+export const LIVENESS_UNKNOWN =
+  "which sessions are running cannot be read on this system (no /proc): no scratch folder or worktree is offered for cleaning";
+
+/** The kinds judged by which sessions are running. */
+const BY_LIVENESS = new Set<Candidate["kind"]>(["scratch", "worktree"]);
+
+/**
+ * Without knowing which sessions run, a running one's scratch folder and
+ * worktrees would look safe to remove: they are counted, never offered.
+ * Docker's cache, disk images and databases do not depend on it and stay.
+ */
+export function gateOnLiveness(candidates: Candidate[], known: boolean): Candidate[] {
+  return known ? candidates : candidates.filter((candidate) => !BY_LIVENESS.has(candidate.kind));
 }
 
-export async function scan(input: ScanInput): Promise<Scan> {
+async function scratchAndWorktrees(ctx: Context, size: Sizer): Promise<Found> {
+  const known = ctx.running.known;
+  if (!known) {
+    ctx.notes.push(`liveness: ${LIVENESS_UNKNOWN}`);
+    ctx.progress.finish("Worktrees", "skipped", "running sessions cannot be read here");
+  }
+  const [scratch, trees] = await Promise.all([
+    ctx.progress.run("Scratch folders", ctx.notes, async () => {
+      const found = scratchFindings(
+        await readScratch(ctx.input.sessions, size),
+        ctx.running,
+        ctx.on("/tmp"),
+      );
+      const detail = known
+        ? `${found.candidates.length} could go`
+        : "counted, not offered: running sessions cannot be read here";
+      return { value: found, detail };
+    }),
+    known
+      ? ctx.progress.run("Worktrees", ctx.notes, async () => {
+          const list = await readWorktrees(await findRepos(ctx.roots));
+          const found = await worktreeCandidates(
+            list,
+            ctx.input.sessions,
+            ctx.running,
+            ctx.on,
+            size,
+          );
+          return { value: found, detail: `${list.length} found, ${found.length} not in use` };
+        })
+      : Promise.resolve(null),
+  ]);
+  return {
+    usage: scratch === null ? [] : [scratch.usage],
+    candidates: gateOnLiveness([...(scratch?.candidates ?? []), ...(trees ?? [])], known),
+  };
+}
+
+/** Each folder directly under a Windows folder, by name: `base\<oid>` of a Postgres data folder. */
+async function baseFolders(windowsPath: string): Promise<Map<string, number>> {
+  const folders = await windowsFolders([windowsPath], () => undefined, 1, 0);
+  return new Map(
+    folders
+      .filter((folder) => folder.path !== windowsPath)
+      .map((folder) => [folder.path.split("\\").at(-1) ?? "", folder.bytes]),
+  );
+}
+
+async function databases(ctx: Context): Promise<Found> {
+  const config = ctx.input.config.postgres;
+  if (config === undefined) {
+    ctx.progress.finish("Databases", "skipped", "no Postgres in config.json");
+    return NOTHING;
+  }
+  const found = await ctx.progress.run("Databases", ctx.notes, async () => {
+    const {
+      dataDirectory,
+      databases: list,
+      fellBack,
+    } = await readDatabases(queryOf(config), ctx.wsl ? baseFolders : null);
+    if (fellBack !== null) {
+      ctx.notes.push(
+        `databases: reading their folders failed (${fellBack}); asked Postgres instead`,
+      );
+    }
+    const repos = await findRepos(ctx.roots);
+    const trees = await readWorktrees(repos);
+    const envs = envTexts([...repos, ...trees.map((tree) => tree.path)]);
+    const result = databaseFindings(list, envs, driveOf(dataDirectory, ctx.drives), dataDirectory);
+    const how = fellBack === null ? "" : " · sized by Postgres, slower";
+    return { value: result, detail: `${list.length} databases${how}` };
+  });
+  return found === null ? NOTHING : { usage: [found.usage], candidates: found.candidates };
+}
+
+export async function scan(
+  input: ScanInput,
+  onProgress: (parts: Part[]) => void = () => undefined,
+): Promise<Scan> {
   const started = Date.now();
   const notes: string[] = [];
+  const progress = new Progress(PARTS, onProgress);
   const wsl = onWsl();
+  progress.start("Drives");
   const drives = await readDrives(wsl);
-  const on = (path: string) => driveOf(path, drives);
-  const running = await readRunning();
-  const roots = input.config.roots ?? defaultRoots();
-
-  const imageList = wsl ? await readImagesNoted(notes) : [];
-  const dockerImage = imageList.find(isDockerData);
-  const dockerRead = await docker(
-    dockerImage === undefined ? on("/") : on(dockerImage.path),
+  progress.finish("Drives", "done", drives.map((drive) => drive.label).join(" · "));
+  const ctx: Context = {
+    input,
+    progress,
     notes,
-  );
+    drives,
+    on: (path) => driveOf(path, drives),
+    running: await readRunning(),
+    roots: input.config.roots ?? defaultRoots(),
+    wsl,
+  };
   const parts = await Promise.all([
-    Promise.resolve(images(imageList, drives, dockerRead.totalBytes)),
-    attempt("scratch folders", notes, async () => {
-      const found = scratchFindings(await readScratch(input.sessions), running, on("/tmp"));
-      return { usage: [found.usage], candidates: found.candidates };
-    }),
-    attempt("worktrees", notes, async () => {
-      const trees = await readWorktrees(await findRepos(roots));
-      return {
-        usage: [],
-        candidates: await worktreeCandidates(trees, input.sessions, running, on),
-      };
-    }),
-    attempt("folders", notes, async () => ({
-      usage: await linuxFolders([homedir(), "/tmp"], on(homedir())),
-      candidates: [],
-    })),
-    postgres(input, roots, drives, notes),
+    linux(ctx).then(async ({ found, size }) => [found, await scratchAndWorktrees(ctx, size)]),
+    windows(ctx).then((found) => [found]),
+    imagesAndDocker(ctx).then((found) => [found]),
+    databases(ctx).then((found) => [found]),
   ]);
-  // Docker's own bytes live inside its disk image: only the candidates are listed.
-  const all = [dockerRead.found, ...parts];
+  const all = parts.flat();
   return {
     at: started,
     took: Date.now() - started,
     drives,
-    usage: onePerPath([...all.flatMap((part) => part.usage), ...input.windowsFolders]),
+    usage: onePerPath(all.flatMap((part) => part.usage)),
     candidates: all.flatMap((part) => part.candidates).sort((a, b) => b.bytes - a.bytes),
     notes,
   };
@@ -127,35 +272,4 @@ export function onePerPath(usage: Usage[]): Usage[] {
     if (seen === undefined || seen.what === "folder") byPath.set(key, item);
   }
   return [...byPath.values()].sort((a, b) => b.bytes - a.bytes);
-}
-
-async function readImagesNoted(notes: string[]): Promise<DiskImage[]> {
-  try {
-    return await readImages();
-  } catch (error) {
-    notes.push(`disk images: ${error instanceof Error ? error.message : String(error)}`);
-    return [];
-  }
-}
-
-function none(): Promise<Found> {
-  return Promise.resolve({ usage: [], candidates: [] });
-}
-
-function postgres(
-  input: ScanInput,
-  roots: string[],
-  drives: Drive[],
-  notes: string[],
-): Promise<Found> {
-  const config = input.config.postgres;
-  if (config === undefined) return none();
-  return attempt("postgres", notes, async () => {
-    const { dataDirectory, databases } = await readDatabases(config);
-    const repos = await findRepos(roots);
-    const trees = await readWorktrees(repos);
-    const envs = envTexts([...repos, ...trees.map((tree) => tree.path)]);
-    const found = databaseFindings(databases, envs, driveOf(dataDirectory, drives), dataDirectory);
-    return { usage: [found.usage], candidates: found.candidates };
-  });
 }

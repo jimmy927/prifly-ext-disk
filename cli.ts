@@ -13,10 +13,26 @@ import { dirname } from "node:path";
 import { readCache, writeCache } from "./scan/cache";
 import { readConfig } from "./scan/config";
 import { markdown } from "./scan/format";
+import type { Part } from "./scan/progress";
 import { scan } from "./scan/scan";
 import { readArchived, readKnown } from "./scan/sessions";
 
 const folder = dirname(import.meta.path);
+
+/** Each part's start and end on standard error, so a session sees the scan move. */
+function reportParts(): (parts: Part[]) => void {
+  const told = new Map<string, string>();
+  return (parts) => {
+    for (const part of parts) {
+      if (told.get(part.name) === part.state || part.state === "waiting") continue;
+      told.set(part.name, part.state);
+      const took = part.state === "running" ? "" : ` (${(part.ms / 1000).toFixed(1)} s)`;
+      process.stderr.write(
+        `${part.name}: ${part.state}${part.detail === "" ? "" : ` — ${part.detail}`}${took}\n`,
+      );
+    }
+  };
+}
 
 async function main(args: string[]): Promise<void> {
   const cached = readCache(folder);
@@ -30,12 +46,8 @@ async function main(args: string[]): Promise<void> {
       ...session,
       archived: archived.has(session.id),
     }));
-    result = await scan({
-      sessions,
-      config: readConfig(folder),
-      windowsFolders: cached?.windows?.usage ?? [],
-    });
-    writeCache(folder, { scan: result, sessions, windows: cached?.windows ?? null });
+    result = await scan({ sessions, config: readConfig(folder) }, reportParts());
+    writeCache(folder, { scan: result, sessions });
   }
   process.stdout.write(
     args.includes("--json") ? `${JSON.stringify(result, null, 2)}\n` : `${markdown(result)}\n`,
