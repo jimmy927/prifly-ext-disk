@@ -137,6 +137,33 @@ function claimed(tree: Worktree, sessions: SessionInfo[], running: Running): boo
   return sessionsIn(tree.path, sessions).some((session) => isLive(session, running));
 }
 
+/**
+ * Worktrees read at once. Each is four `git` processes, and starting one
+ * blocks the thread for about 2 ms: all 197 worktrees' 788 started together
+ * held prifly's event loop for 1.5 s (2026-09-27). Eight at a time lets it
+ * breathe between them and takes no longer — the git calls are quick.
+ */
+const TREES_AT_ONCE = 8;
+
+/** `each` over `items` with at most `limit` running, results in order. */
+export async function mapLimited<T, R>(
+  items: T[],
+  limit: number,
+  each: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      out[i] = await each(items[i] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
+}
+
 export async function worktreeCandidates(
   trees: Worktree[],
   sessions: SessionInfo[],
@@ -147,7 +174,7 @@ export async function worktreeCandidates(
   const idle = trees.filter((tree) => !claimed(tree, sessions, running));
   const [sizes, states] = await Promise.all([
     size(idle.map((tree) => tree.path)),
-    Promise.all(idle.map((tree) => treeState(tree).catch(() => null))),
+    mapLimited(idle, TREES_AT_ONCE, (tree) => treeState(tree).catch(() => null)),
   ]);
   const now = Date.now();
   return idle.flatMap((tree, i) => {
