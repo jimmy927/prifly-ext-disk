@@ -1,28 +1,35 @@
 /**
  * fastdu (https://github.com/jimmy927/fastdu), the native walker for the
- * Linux folders and the Windows drives: the release this extension runs, and
- * each binary's checksum, which a download must match before it is kept.
+ * Linux or macOS folders and the Windows drives: the release this extension
+ * runs, and each binary's checksum, which a download must match before it is
+ * kept.
  */
 
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-export const FASTDU_VERSION = "1.0.0";
+export const FASTDU_VERSION = "1.1.0";
 
 const SHA256 = {
-  "fastdu-linux-x64": "702e5bf328af606f08a2cc5b997b0755879e69da9710425aa891e762c11a792d",
-  "fastdu-linux-arm64": "7f1516c49be17f107b357c3fa7d8d9ef4b5ad4b873f85d5a9c10425f7abb28d6",
-  "fastdu-windows-x64.exe": "06bf51955c7eb3b0f4fb4376f194fee4422af61c2f9ed63db98f196add902e96",
+  "fastdu-linux-x64": "688b478752a9121fb1dd9218d62c8fcf0187b60e1671664e3541ce8fba196602",
+  "fastdu-linux-arm64": "ea7f036cc3a659bfb2f343aaae9a59c40b5d7260f48bb6cd3ef7c992605faaba",
+  "fastdu-macos": "f5f7c97e83f3018c5a62006f8689630b33ef7e47e59f3bf4c61c98cec2096b31",
+  "fastdu-windows-x64.exe": "a8a9be5bbad45583fb41e044cd48655ac1cf0289fc2ead7be9617a089cc8e96d",
 } as const;
 
 export type FastduAsset = keyof typeof SHA256;
 
-/** This machine's Linux build, or null when there is none for its system or processor. */
-export function linuxAsset(
+/**
+ * The build for this machine's own folders — Linux, or macOS (one file for
+ * Intel and Apple Silicon) — or null when there is none for its system or
+ * processor.
+ */
+export function unixAsset(
   arch: string = process.arch,
   platform: string = process.platform,
 ): FastduAsset | null {
+  if (platform === "darwin") return "fastdu-macos";
   if (platform !== "linux") return null;
   if (arch === "x64") return "fastdu-linux-x64";
   if (arch === "arm64") return "fastdu-linux-arm64";

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fastduBinary, linuxAsset } from "../scan/fastdu-release";
+import { fastduBinary, unixAsset } from "../scan/fastdu-release";
 import { nativeWalk } from "../scan/linux/fastdu";
 import { run } from "../scan/run";
 import { walk } from "../scan/walk";
@@ -38,11 +38,13 @@ describe("fastdu's release", () => {
     }
   });
 
-  test("a system or processor without a build gets none", () => {
-    expect(linuxAsset("x64", "linux")).toBe("fastdu-linux-x64");
-    expect(linuxAsset("arm64", "linux")).toBe("fastdu-linux-arm64");
-    expect(linuxAsset("riscv64", "linux")).toBeNull();
-    expect(linuxAsset("arm64", "darwin")).toBeNull();
+  test("each system gets its build, and one without a build gets none", () => {
+    expect(unixAsset("x64", "linux")).toBe("fastdu-linux-x64");
+    expect(unixAsset("arm64", "linux")).toBe("fastdu-linux-arm64");
+    expect(unixAsset("arm64", "darwin")).toBe("fastdu-macos");
+    expect(unixAsset("x64", "darwin")).toBe("fastdu-macos");
+    expect(unixAsset("riscv64", "linux")).toBeNull();
+    expect(unixAsset("x64", "freebsd")).toBeNull();
   });
 });
 

@@ -1,12 +1,12 @@
 /**
- * fastdu for Linux: the walk in C, from fastdu's release (`fastdu-release.ts`),
- * downloaded on first use. Where it cannot be had, `walk.ts` walks in
- * TypeScript instead — about seven times slower on ~/src (2026-09-27: 1.2 s
- * against 7.9 s, with gdu at 4.2 s and ncdu at 2.8 s).
+ * fastdu for Linux and macOS: the walk in C, from fastdu's release
+ * (`fastdu-release.ts`), downloaded on first use. Where it cannot be had,
+ * `walk.ts` walks in TypeScript instead — about seven times slower on ~/src
+ * (2026-09-27: 1.2 s against 7.9 s, with gdu at 4.2 s and ncdu at 2.8 s).
  */
 
 import { join } from "node:path";
-import { FASTDU_VERSION, fastduBinary, linuxAsset } from "../fastdu-release";
+import { FASTDU_VERSION, fastduBinary, unixAsset } from "../fastdu-release";
 import type { WalkProgress } from "../walk";
 import { runStreaming } from "../windows/fastdu";
 
@@ -17,7 +17,7 @@ let fetched: Promise<string> | null = null;
 /** The walker; throws when it cannot be had here (offline, no build for this processor). */
 export function linuxFastdu(): Promise<string> {
   if (fetched === null) {
-    const asset = linuxAsset();
+    const asset = unixAsset();
     fetched = (
       asset === null
         ? Promise.reject(new Error(`no fastdu build for ${process.platform} ${process.arch}`))

@@ -4,8 +4,6 @@ How full each drive is, what takes the space, and what could be cleaned — and
 a Claude Code skill that proposes what to clean, asks you, and does it
 without losing work.
 
-- **Status bar**: free space on every drive (`WSL 724 GB free · C: 256 GB free · D: 2.5 TB free`),
-  amber below 10 % free, red below 5 %. Its tooltip says how much could be cleaned.
 - **Disk space window** (status bar button): a bar per drive split into what fills it, the
   biggest folders and files per drive, and the cleanup candidates grouped by how careful
   removing them must be.
@@ -14,11 +12,9 @@ without losing work.
   again, asks you once, saves what must be saved, cleans it, and scans again. Start several,
   close the Disk space window, carry on; the drives are rescanned when each session ends.
   This needs a prifly with `prifly-launch` (panels asking the window to start a session).
-- **Clean up disk space** in the New session launcher starts a session that runs the
-  `disk-cleanup` skill: it shows the drives, proposes what to clean with a questionnaire,
-  removes only what you pick, saves uncommitted work and unpushed commits first, and reports
-  each drive's free space before and after. Any session can do the same when asked to
-  "clean up disk space".
+- **The `disk-cleanup` skill**: any session asked to "clean up disk space" shows the drives,
+  proposes what to clean with a questionnaire, removes only what you pick, saves uncommitted
+  work and unpushed commits first, and reports each drive's free space before and after.
 
 ## What it looks at
 
@@ -54,7 +50,8 @@ of `C:\` (1.86 M files) in 13.1 s where gdu takes 16.2 s, and `~/src` (1.15 M fi
   `%LOCALAPPDATA%\prifly-disk\`. Without it, `fastdu.cs` — the same walk in C#, 22 s on
   `C:\` (15 s with the server garbage collector) — is compiled with the compiler every
   Windows has, and without that, PowerShell reads the drives.
-- **Linux**: fastdu's release for the processor, downloaded on first use into `cache/`.
+- **Linux and macOS**: fastdu's release for the system and processor, downloaded on first
+  use into `cache/`.
   The home folder and `/tmp` are walked once — every folder's size comes out of the one
   pass, and the scratch folders, worktrees and biggest folders are looked up in it.
   Without fastdu, the same walk runs in TypeScript (`scan/walk.ts`), 7.9 s on `~/src`.
@@ -73,8 +70,7 @@ about a minute and a half.
 When the fast way fails, the slow one stands in and the part says so: PowerShell's
 `Get-ChildItem` for the Windows folders when fastdu can neither be had nor started, the
 TypeScript walk for the Linux folders, and `pg_database_size` for the databases when their
-folders cannot be read. macOS runs the TypeScript walk for now; fastdu has no macOS build
-yet.
+folders cannot be read. On macOS, fastdu's macOS build walks the folders.
 
 **Where running sessions cannot be read** — no `/proc`, as on macOS — no scratch folder or
 worktree is offered for cleaning: every session would look ended, and a running one's
