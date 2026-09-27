@@ -1,4 +1,4 @@
-/** A scan in words: for the status chip, the launcher and `bin/disk-scan`. */
+/** A scan in words: for the launcher and `bin/disk-scan`. */
 
 import type { Candidate, Safety, Scan } from "./types";
 
@@ -23,26 +23,6 @@ const SAFETY_WORDS: Record<Safety, string> = {
 
 export function total(candidates: Candidate[]): number {
   return candidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
-}
-
-export function summary(scan: Scan): {
-  label: string;
-  details: string[];
-  cleanable: string;
-  markdown: string;
-} {
-  const label = scan.drives
-    .map((drive) => `${drive.label} ${bytes(drive.freeBytes)} free`)
-    .join(" · ");
-  const cleanable = bytes(total(scan.candidates));
-  const details = [
-    ...scan.drives.map(
-      (drive) =>
-        `${drive.label} ${bytes(drive.freeBytes)} free of ${bytes(drive.sizeBytes)} (${Math.round((100 * drive.usedBytes) / drive.sizeBytes)} % used)`,
-    ),
-    `${cleanable} could be cleaned, in ${scan.candidates.length} places`,
-  ];
-  return { label, details, cleanable, markdown: markdown(scan) };
 }
 
 /** The whole scan as Markdown: drives, then candidates by safety, then notes. */

@@ -1,8 +1,7 @@
 /**
  * Disk space: how full each drive is, what takes the space, and what could
- * be cleaned — in a window of its own (`panel/`), summed up in the status bar,
- * and handed to the `disk-cleanup` skill, which asks the reader what to clean
- * and does it.
+ * be cleaned — in a window of its own (`panel/`) — handed to the
+ * `disk-cleanup` skill, which asks the reader what to clean and does it.
  *
  * A scan runs at start and every half hour, and on demand from the window,
  * whose progress it shows part by part while it runs. Its result is kept in
@@ -16,10 +15,9 @@
  */
 
 import { homedir } from "node:os";
-import type { Decoration, ExtensionApi, Launch, LaunchChoice, PanelRequest } from "./prifly-api";
+import type { ExtensionApi, Launch, PanelRequest } from "./prifly-api";
 import { readCache, writeCache } from "./scan/cache";
 import { readConfig } from "./scan/config";
-import { summary } from "./scan/format";
 import type { Part } from "./scan/progress";
 import { cleanupPrompt } from "./scan/prompt";
 import { scan } from "./scan/scan";
@@ -57,7 +55,6 @@ function rescan(current: State): Promise<Scan> {
       current.last = result;
       current.error = "";
       writeCache(current.api.folder, { scan: result, sessions: info });
-      current.api.show({}, chips(result));
       current.api.log("scanned", { took: result.took, candidates: result.candidates.length });
       return result;
     })
@@ -70,23 +67,6 @@ function rescan(current: State): Promise<Scan> {
       current.running = null;
     });
   return current.running;
-}
-
-/** One chip for the status bar: free space on every drive, warning when one runs low. */
-export function chips(result: Scan): Decoration[] {
-  const low = result.drives.map((drive) => drive.freeBytes / drive.sizeBytes);
-  const worst = Math.min(...low);
-  const text = summary(result);
-  return [
-    {
-      key: "drives",
-      icon: "hard-drive",
-      label: text.label,
-      tone: worst < 0.05 ? "critical" : worst < 0.1 ? "warning" : "muted",
-      details: text.details,
-      launcher: "cleanup",
-    },
-  ];
 }
 
 /** A cleanup session that has ended is what the drives look like now: scan again. */
@@ -117,7 +97,6 @@ export function activate(api: ExtensionApi): () => void {
     cleanups: new Set(),
   };
   state = current;
-  if (current.last !== null) api.show({}, chips(current.last));
   const soon = setTimeout(() => void rescan(current).catch(() => undefined), 10_000);
   const timer = setInterval(() => void rescan(current).catch(() => undefined), EVERY);
   const watcher = setInterval(() => watchCleanups(current), CLEANUPS_EVERY);
@@ -134,7 +113,6 @@ function adoptNewer(current: State): void {
   const cached = readCache(current.api.folder);
   if (cached === null || (current.last !== null && cached.scan.at <= current.last.at)) return;
   current.last = cached.scan;
-  current.api.show({}, chips(cached.scan));
 }
 
 function status(current: State) {
@@ -161,20 +139,7 @@ export async function panel(_panelId: string, request: PanelRequest): Promise<un
   }
 }
 
-export function choices(): LaunchChoice[] {
-  const result = state?.last;
-  const detail =
-    result === undefined || result === null
-      ? "Scans the drives first"
-      : `${summary(result).cleanable} could be cleaned, by the last scan`;
-  return [{ key: "cleanup", title: "Clean up disk space", detail }];
-}
-
-/**
- * The session a launch key starts: `cleanup` from the launcher looks at
- * everything; a candidate's id or `group:<safety>` from the window's buttons
- * cleans just that.
- */
+/** The session a window button starts: a candidate's id, or `group:<safety>` for a group. */
 export function launch(_launchId: string, key: string): Launch {
   return {
     prompt: cleanupPrompt(state?.last ?? null, key),
@@ -186,13 +151,4 @@ export function launch(_launchId: string, key: string): Launch {
 /** The session a cleanup became: watched, so the drives are scanned again when it ends. */
 export function launched(_launchId: string, _key: string, sessionId: string): void {
   state?.cleanups.add(sessionId);
-}
-
-/** A click on the status chip opens the cleanup launcher's one item. */
-export function open(): { title: string; markdown: string } {
-  const result = state?.last;
-  if (result === undefined || result === null) {
-    return { title: "Disk space", markdown: "No scan yet: it runs a few seconds after start." };
-  }
-  return { title: "Disk space", markdown: summary(result).markdown };
 }
