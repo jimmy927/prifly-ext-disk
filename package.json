@@ -1,6 +1,7 @@
 {
   "name": "prifly-ext-disk",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "A prifly extension: how full your drives are, what takes the space, and a Claude Code skill that cleans up with you.",
   "scripts": {
