@@ -2,28 +2,33 @@
  * One scan, in named parts that run side by side and report as they go
  * (`progress.ts`). Each part stands on its own, so a machine without Docker,
  * Windows or Postgres still gets the rest; what a part could not do becomes a
- * note. The two walks — this Linux's folders (`walk.ts`) and the Windows
- * drives' (`windows/fastdu.ts`) — are the long ones; the scratch folders and
- * worktrees are looked up in the Linux walk rather than walked again.
+ * note. The two walks — the Linux folders (`walk.ts`) and the Windows
+ * drives' (`windows/fastdu.ts`) — are the long ones, each fastdu on its own
+ * system and neither crossing into the other's: under WSL `-x` keeps the Linux
+ * walk off `/mnt/c`, and on Windows itself the Linux walk runs inside the WSL
+ * distro (`wsl.ts`). Under WSL the scratch folders and worktrees are looked up
+ * in the Linux walk rather than walked again; on Windows they are Windows
+ * folders, measured on their own.
  */
 
-import { homedir } from "node:os";
+import { availableParallelism, homedir } from "node:os";
 import type { Config } from "./config";
 import { dockerCandidates, readDocker } from "./docker";
-import { driveOf, readDrives } from "./drives";
+import { driveOf, readDrives, readWindowsDrives } from "./drives";
 import { linuxFolders, windowsUsage } from "./folders";
 import { bytes } from "./format";
 import { type DiskImage, imageFindings, readImages } from "./images";
 import { databaseFindings, envTexts, queryOf, readDatabases } from "./postgres";
 import { counted, type Part, Progress } from "./progress";
-import { onWsl } from "./run";
-import { readScratch, scratchFindings } from "./scratch";
+import { ON_WINDOWS, onWsl } from "./run";
+import { readScratch, scratchFindings, scratchRoot } from "./scratch";
 import { type Running, readRunning } from "./sessions";
 import type { Candidate, Drive, Scan, SessionInfo, Usage } from "./types";
 import { type Sizer, sizerOf, walkFastest } from "./walk";
 import { windowsFolders } from "./windows/fastdu";
 import { windowsFoldersOrSlow } from "./windows/slowdu";
 import { defaultRoots, findRepos, readWorktrees, worktreeCandidates } from "./worktrees";
+import { readDistro, wslDrive, wslWalk } from "./wsl";
 
 export type ScanInput = { sessions: SessionInfo[]; config: Config };
 
@@ -50,7 +55,10 @@ type Context = {
   on: (path: string) => string;
   running: Running;
   roots: string[];
-  wsl: boolean;
+  /** Windows reachable — this is it, or WSL runs on it: its drives and disk images can be read. */
+  windows: boolean;
+  /** The WSL distro whose Linux is scanned — this one under WSL — or why none is. */
+  distro: { name: string } | { why: string };
 };
 
 function isDockerData(image: DiskImage): boolean {
@@ -59,6 +67,7 @@ function isDockerData(image: DiskImage): boolean {
 
 /** This Linux's home folder and /tmp, walked once; the sizes serve the parts after it. */
 async function linux(ctx: Context): Promise<{ found: Found; size: Sizer }> {
+  if (ON_WINDOWS) return { found: await wslFolders(ctx), size: sizerOf(new Map()) };
   const roots = [homedir(), "/tmp"];
   const walked = await ctx.progress.run("Linux folders", ctx.notes, async () => {
     const result = await walkFastest(roots, (p) =>
@@ -82,9 +91,33 @@ async function linux(ctx: Context): Promise<{ found: Found; size: Sizer }> {
   };
 }
 
+/**
+ * From Windows, the WSL distro's home folder and /tmp, walked inside it.
+ * Only its biggest folders come of it: the scratch folders and worktrees
+ * looked at are Windows' own, where sessions run now.
+ */
+async function wslFolders(ctx: Context): Promise<Found> {
+  const distro = ctx.distro;
+  if (!("name" in distro)) {
+    ctx.progress.finish("Linux folders", "skipped", distro.why);
+    return NOTHING;
+  }
+  const walked = await ctx.progress.run("Linux folders", ctx.notes, async () => {
+    const result = await wslWalk(
+      distro.name,
+      (p) => ctx.progress.update("Linux folders", counted(p.files, bytes(p.bytes))),
+      availableParallelism(),
+    );
+    const { files, bytes: total } = result.progress;
+    return { value: result, detail: `${counted(files, bytes(total))} in ${distro.name}` };
+  });
+  if (walked === null) return NOTHING;
+  return { usage: linuxFolders(walked.sizes, walked.roots, ctx.on), candidates: [] };
+}
+
 async function windows(ctx: Context): Promise<Found> {
   const letters = ctx.drives.map((drive) => drive.label).filter((label) => /^[A-Z]:$/.test(label));
-  if (!ctx.wsl || letters.length === 0) {
+  if (!ctx.windows || letters.length === 0) {
     ctx.progress.finish("Windows folders", "skipped", "no Windows drives here");
     return NOTHING;
   }
@@ -112,13 +145,13 @@ async function windows(ctx: Context): Promise<Found> {
 /** The WSL and Docker disk images, then Docker, which is measured against its image. */
 async function imagesAndDocker(ctx: Context): Promise<Found> {
   const list =
-    (ctx.wsl
+    (ctx.windows
       ? await ctx.progress.run("Disk images", ctx.notes, async () => {
           const found = await readImages();
           return { value: found, detail: `${found.length} found` };
         })
       : null) ?? [];
-  if (!ctx.wsl) ctx.progress.finish("Disk images", "skipped", "not under WSL");
+  if (!ctx.windows) ctx.progress.finish("Disk images", "skipped", "no Windows here");
   const dockerImage = list.find(isDockerData);
   const drive = dockerImage === undefined ? ctx.on("/") : ctx.on(dockerImage.path);
   const df = await ctx.progress.run("Docker", ctx.notes, async () => {
@@ -126,7 +159,7 @@ async function imagesAndDocker(ctx: Context): Promise<Found> {
     return { value: read, detail: `${bytes(read.totalBytes)} in images, volumes and cache` };
   });
   const found: Found = { usage: [], candidates: df === null ? [] : dockerCandidates(df, drive) };
-  const own = process.env["WSL_DISTRO_NAME"];
+  const own = "name" in ctx.distro ? ctx.distro.name : undefined;
   const rootUsed = ctx.drives.find((each) => each.mount === "/")?.usedBytes ?? null;
   for (const image of list) {
     let inside: number | null = null;
@@ -165,7 +198,7 @@ async function scratchAndWorktrees(ctx: Context, size: Sizer): Promise<Found> {
       const found = scratchFindings(
         await readScratch(ctx.input.sessions, size),
         ctx.running,
-        ctx.on("/tmp"),
+        ctx.on(scratchRoot()),
       );
       const detail = known
         ? `${found.candidates.length} could go`
@@ -213,7 +246,7 @@ async function databases(ctx: Context): Promise<Found> {
       dataDirectory,
       databases: list,
       fellBack,
-    } = await readDatabases(queryOf(config), ctx.wsl ? baseFolders : null);
+    } = await readDatabases(queryOf(config), ctx.windows ? baseFolders : null);
     if (fellBack !== null) {
       ctx.notes.push(
         `databases: reading their folders failed (${fellBack}); asked Postgres instead`,
@@ -229,6 +262,24 @@ async function databases(ctx: Context): Promise<Found> {
   return found === null ? NOTHING : { usage: [found.usage], candidates: found.candidates };
 }
 
+/** On Windows: its fixed drives, and the WSL distro's disk as "WSL" while it runs. */
+async function windowsAndWsl(
+  distro: { name: string } | { why: string },
+  notes: string[],
+): Promise<Drive[]> {
+  const drives = await readWindowsDrives();
+  if (!("name" in distro)) return drives;
+  try {
+    const own = await wslDrive(distro.name);
+    if (own !== null) drives.push(own);
+  } catch (error) {
+    notes.push(
+      `wsl: its disk could not be read (${error instanceof Error ? error.message : error})`,
+    );
+  }
+  return drives;
+}
+
 export async function scan(
   input: ScanInput,
   onProgress: (parts: Part[]) => void = () => undefined,
@@ -238,7 +289,9 @@ export async function scan(
   const progress = new Progress(PARTS, onProgress);
   const wsl = onWsl();
   progress.start("Drives");
-  const drives = await readDrives(wsl);
+  const distro = ON_WINDOWS ? await readDistro() : { name: process.env["WSL_DISTRO_NAME"] ?? "" };
+  if ("why" in distro) notes.push(`wsl: ${distro.why}; its Linux folders are not read`);
+  const drives = ON_WINDOWS ? await windowsAndWsl(distro, notes) : await readDrives(wsl);
   progress.finish("Drives", "done", drives.map((drive) => drive.label).join(" · "));
   const ctx: Context = {
     input,
@@ -248,7 +301,8 @@ export async function scan(
     on: (path) => driveOf(path, drives),
     running: await readRunning(),
     roots: input.config.roots ?? defaultRoots(),
-    wsl,
+    windows: ON_WINDOWS || wsl,
+    distro,
   };
   const parts = await Promise.all([
     linux(ctx).then(async ({ found, size }) => [found, await scratchAndWorktrees(ctx, size)]),

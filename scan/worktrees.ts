@@ -216,7 +216,7 @@ export function worktreeCandidate(
   return {
     id: `worktree:${tree.path}`,
     kind: "worktree",
-    title: `Worktree ${tree.path.split("/").at(-1)} (${tree.branch})`,
+    title: `Worktree ${tree.path.split(/[\\/]/).at(-1)} (${tree.branch})`,
     path: tree.path,
     bytes,
     drive,

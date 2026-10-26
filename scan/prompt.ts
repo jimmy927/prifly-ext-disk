@@ -43,6 +43,6 @@ export function cleanupPrompt(scan: Scan | null, key: string): string {
     "",
     "Check each one again before touching it: the scan may be out of date, and a session may have started using it since. Leave out what is now in use and say why.",
     "Then confirm once with AskUserQuestion — exactly what will be removed, what is lost, what stops, and what cannot be undone — and save what the `before:` lines say first.",
-    "Finish with each drive's free space before and after (`df -h`), and run `disk-scan --fresh` so the Disk space window shows the result.",
+    "Finish with each drive's free space before and after — the drives `disk-scan` printed before, and `disk-scan --fresh` after, which also shows the Disk space window the result.",
   ].join("\n");
 }

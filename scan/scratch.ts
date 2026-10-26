@@ -1,5 +1,6 @@
 /**
- * Claude Code's per-session scratch folders: `/tmp/claude-<uid>/<project>/<session id>`.
+ * Claude Code's per-session scratch folders: `/tmp/claude-<uid>/<project>/<session id>`,
+ * on Windows `%TEMP%\claude\<project>\<session id>`.
  *
  * They are never cleaned by Claude Code. On 2026-09-26 they held 86 GB, 43 GB
  * of it one live session's. A folder is offered when its session is archived
@@ -7,6 +8,7 @@
  */
 
 import { readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inUse, isLive, type Running } from "./sessions";
 import type { Candidate, SessionInfo, Usage } from "./types";
@@ -17,8 +19,15 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 /** Folders smaller than this are left out of the list, though still counted. */
 const LISTED = 200e6;
 
+/** `/tmp/claude-<uid>`; on Windows, which has no uid, `%TEMP%\claude`. */
 export function scratchRoot(): string {
+  if (process.platform === "win32") return join(tmpdir(), "claude");
   return `/tmp/claude-${process.getuid?.() ?? 1000}`;
+}
+
+/** The last name in a path, either way it is separated: the session id of a scratch folder. */
+function lastName(path: string): string {
+  return path.split(/[\\/]/).at(-1) ?? "";
 }
 
 async function sessionFolders(root: string): Promise<string[]> {
@@ -52,7 +61,7 @@ export async function readScratch(sessions: SessionInfo[], size: Sizer): Promise
   return folders.map((path) => ({
     path,
     bytes: sizes.get(path) ?? 0,
-    session: byId.get(path.split("/").at(-1) ?? "") ?? null,
+    session: byId.get(lastName(path)) ?? null,
   }));
 }
 
@@ -80,7 +89,7 @@ function scratchCandidate(
 ): Candidate | null {
   const { session } = folder;
   if (inUse(folder.path, running.folders)) return null;
-  if (running.ids.has(folder.path.split("/").at(-1) ?? "")) return null;
+  if (running.ids.has(lastName(folder.path))) return null;
   if (session !== null && isLive(session, running)) return null;
   const archived = session?.archived === true;
   const title = session === null ? "a session prifly has no record of" : `“${session.title}”`;

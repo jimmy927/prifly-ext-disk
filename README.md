@@ -21,7 +21,7 @@ without losing work.
 | Where | Offered as | How careful |
 |---|---|---|
 | WSL and Docker Desktop disk images (`.vhdx`) that take far more than their Linux holds | trim (sparse image) or compact | safe · needs downtime |
-| Claude Code scratch folders, `/tmp/claude-<uid>/<project>/<session>` | per session | safe when archived, check when not running |
+| Claude Code scratch folders, `/tmp/claude-<uid>/<project>/<session>` (on Windows `%TEMP%\claude\…`) | per session | safe when archived, check when not running |
 | Git worktrees under your home folder and `~/src` that no running session uses | per worktree | safe when clean, pushed and quiet for a day |
 | Docker dangling images and build cache; unused tagged images | two groups | safe · check |
 | Local Postgres databases no checkout's `.env` names (when configured) | per database | check — cannot be undone |
@@ -42,7 +42,9 @@ each part's progress on standard error; `--json` for JSON).
 ## How it reads sizes fast
 
 Folder sizes come from [fastdu](https://github.com/jimmy927/fastdu), a `du` in C for
-Windows and Linux that uses every core and asks the file system as little as it can: all
+Windows and Linux that uses every core and asks the file system as little as it can — each
+system walked by its own build, with `-x` so neither walk crosses into the other's disks
+(`/mnt/c` under WSL, a volume mounted in a folder on Windows): all
 of `C:\` (1.86 M files) in 13.1 s where gdu takes 16.2 s, and `~/src` (1.15 M files) in
 1.5 s where ncdu takes 2.5 s. Its README says how, and has the benchmarks.
 
@@ -57,6 +59,11 @@ of `C:\` (1.86 M files) in 13.1 s where gdu takes 16.2 s, and `~/src` (1.15 M fi
   Without fastdu, the same walk runs in TypeScript (`scan/walk.ts`), 7.9 s on `~/src`.
   Counted like `du -x`: allocated blocks, one file system per root, a file with several
   hard links once.
+- **WSL from Windows**: when prifly runs on Windows itself, the default WSL distro's home
+  folder and `/tmp` are walked inside it: fastdu's Linux build, downloaded into
+  `%LOCALAPPDATA%\prifly-disk\`, started through `wsl.exe` — only while the distro runs, as
+  starting it would boot WSL. Its disk shows as the drive **WSL**. The scratch folders and
+  worktrees offered are then Windows' own, where sessions run.
 - **Postgres** names its databases, and their sizes come from their folders under `base\`,
   read by fastdu — `pg_database_size` stats every segment file, which took 50 s on a
   979 GB database on NTFS against 0.8 s.
@@ -71,6 +78,10 @@ When the fast way fails, the slow one stands in and the part says so: PowerShell
 `Get-ChildItem` for the Windows folders when fastdu can neither be had nor started, the
 TypeScript walk for the Linux folders, and `pg_database_size` for the databases when their
 folders cannot be read. On macOS, fastdu's macOS build walks the folders.
+
+On Windows, with no `/proc`, a session runs while the process its
+`~/.claude/sessions/<pid>.json` names lives, and works in that file's folder; other
+programs' folders cannot be read there, which a worktree's "changed N hours ago" guards.
 
 **Where running sessions cannot be read** — no `/proc`, as on macOS — no scratch folder or
 worktree is offered for cleaning: every session would look ended, and a running one's

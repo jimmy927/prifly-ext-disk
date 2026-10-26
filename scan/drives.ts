@@ -1,6 +1,9 @@
-/** The drives: this Linux's own disk and, under WSL, each Windows drive. */
+/**
+ * The drives: this Linux's own disk and, under WSL, each Windows drive; on
+ * Windows itself, its drives and the WSL distro's disk (`wsl.ts`).
+ */
 
-import { run } from "./run";
+import { powershell, run } from "./run";
 import type { Drive } from "./types";
 
 /** Windows drives appear as `/mnt/<letter>`; the rest of `/mnt` is WSL's own plumbing. */
@@ -34,6 +37,36 @@ export function parseDf(out: string, wsl: boolean): Drive[] {
   return drives;
 }
 
+type LogicalDisk = { DeviceID: string; Size: number; FreeSpace: number };
+
+/** `Win32_LogicalDisk` as JSON → the fixed drives, "C:" mounted at `C:\`. */
+export function parseLogicalDisks(out: string): Drive[] {
+  if (out.trim() === "") return [];
+  return (JSON.parse(out) as LogicalDisk[]).map((disk) => ({
+    mount: `${disk.DeviceID}\\`,
+    label: disk.DeviceID,
+    sizeBytes: disk.Size,
+    usedBytes: disk.Size - disk.FreeSpace,
+    freeBytes: disk.FreeSpace,
+  }));
+}
+
+/**
+ * The fixed drives, read on Windows itself — not with `df`, which Git for
+ * Windows brings and which takes its own install folder for `/`.
+ */
+export async function readWindowsDrives(): Promise<Drive[]> {
+  return parseLogicalDisks(
+    (
+      await powershell(
+        "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID, Size, FreeSpace)",
+        30_000,
+      )
+    ).trim(),
+  );
+}
+
+/** This system's drives with `df`: Linux or macOS, and the Windows drives under WSL. */
 export async function readDrives(wsl: boolean): Promise<Drive[]> {
   // A Windows drive that is asleep or unplugged makes df complain and exit 1
   // while still printing the others, so its exit code is not trusted.

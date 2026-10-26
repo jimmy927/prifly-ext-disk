@@ -25,15 +25,16 @@ import { lstatSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { dirname } from "node:path";
 import { nativeWalk } from "./linux/fastdu";
-import { duBytes } from "./run";
+import { duBytes, ON_WINDOWS } from "./run";
 import type { WalkJob, WalkReply } from "./walk-worker";
+import { windowsSizes } from "./windows/fastdu";
 
 /** The size of each of these folders: the parts of a scan that need sizes ask this. */
 export type Sizer = (paths: string[]) => Promise<Map<string, number>>;
 
 /**
  * Sizes looked up in a walk; a folder it did not cover — a worktree outside
- * the walked roots — is measured on its own.
+ * the walked roots, or on Windows any folder of its own — is measured on its own.
  */
 export function sizerOf(sizes: ReadonlyMap<string, number>): Sizer {
   return async (paths) => {
@@ -44,7 +45,8 @@ export function sizerOf(sizes: ReadonlyMap<string, number>): Sizer {
       if (known === undefined) missing.push(path);
       else out.set(path, known);
     }
-    for (const [path, bytes] of await duBytes(missing)) out.set(path, bytes);
+    const measure = ON_WINDOWS ? windowsSizes : duBytes;
+    for (const [path, bytes] of await measure(missing)) out.set(path, bytes);
     return out;
   };
 }

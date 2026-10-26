@@ -52,19 +52,33 @@ export async function nativeWalk(
   threads: number,
   minBytes = 1e6,
 ): Promise<{ sizes: Map<string, number>; progress: WalkProgress }> {
-  const exe = await linuxFastdu();
+  return fastduWalk([await linuxFastdu()], roots, onProgress, threads, minBytes, "/");
+}
+
+/**
+ * fastdu for Linux as `command` starts it — itself, or through `wsl.exe` from
+ * Windows (`wsl.ts`) — over `roots`, as `nativeWalk` says.
+ */
+export async function fastduWalk(
+  command: string[],
+  roots: string[],
+  onProgress: (progress: WalkProgress) => void,
+  threads: number,
+  minBytes: number,
+  cwd: string | undefined,
+): Promise<{ sizes: Map<string, number>; progress: WalkProgress }> {
   let last: WalkProgress = { dirs: 0, files: 0, bytes: 0 };
   // du's options: -x one file system per root, -D a root given as a symbolic
   // link is followed, -B1 disk usage in bytes, --file-count the file-count
   // column, -t the smallest folder printed.
-  const argv = [exe, "-p", "-x", "-D", "-B1", "--file-count", "-t", String(minBytes)];
+  const argv = [...command, "-p", "-x", "-D", "-B1", "--file-count", "-t", String(minBytes)];
   const done = await runStreaming(
     [...argv, "-j", String(threads), "--", ...roots],
     (progress) => {
       last = progress;
       onProgress(progress);
     },
-    "/",
+    cwd,
   );
   if (walkFailed(done)) {
     throw new Error(`fastdu exited ${done.code}: ${done.errors.trim().split("\n").at(-1) ?? ""}`);

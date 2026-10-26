@@ -72,11 +72,55 @@ async function processFolders(proc: string): Promise<string[]> {
   return [...out];
 }
 
+/** Whether a Windows process lives: signal 0 asks without sending anything. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Someone else's, still running.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /**
- * The running sessions and processes, from `/proc`. Where there is none to
- * read, the answer says it does not know rather than that nothing runs.
+ * On Windows, which has no `/proc`: the sessions whose process lives, and the
+ * folders they work in. Other programs' folders cannot be read, which a
+ * worktree's "changed N hours ago" still guards against.
  */
-export async function readRunning(proc = "/proc", processFiles = PROCESS_FILES): Promise<Running> {
+async function runningOnWindows(processFiles: string): Promise<Running> {
+  const ids = new Set<string>();
+  const folders: string[] = [];
+  let files: string[] = [];
+  try {
+    files = await readdir(processFiles);
+  } catch {
+    // No session has run here yet.
+  }
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const entry = JSON.parse(readFileSync(join(processFiles, file), "utf8")) as ProcessFile;
+      if (!alive(entry.pid)) continue;
+      ids.add(entry.sessionId);
+      folders.push(entry.cwd);
+    } catch {
+      // Half written by a process starting up; the next scan reads it whole.
+    }
+  }
+  return { ids, folders, known: true };
+}
+
+/**
+ * The running sessions and processes, from `/proc` — on Windows from the
+ * sessions' own process files. Where neither can be read, the answer says it
+ * does not know rather than that nothing runs.
+ */
+export async function readRunning(
+  proc: string | null = process.platform === "win32" ? null : "/proc",
+  processFiles = PROCESS_FILES,
+): Promise<Running> {
+  if (proc === null) return runningOnWindows(processFiles);
   if (!existsSync(`${proc}/self`)) return { ids: new Set(), folders: [], known: false };
   const [ids, folders] = await Promise.all([runningIds(proc, processFiles), processFolders(proc)]);
   return { ids, folders, known: true };
@@ -121,20 +165,37 @@ export function readKnown(dbPath = PRIFLY_DB): SessionInfo[] {
   }
 }
 
+/**
+ * A path as two Windows paths compare alike: `/` for `\`, lower case. git
+ * writes `C:/Users/…` where prifly and Windows write `C:\Users\…`.
+ */
+function same(path: string): string {
+  return /^[A-Za-z]:[\\/]/.test(path) ? path.replaceAll("\\", "/").toLowerCase() : path;
+}
+
+/** Whether `path` is `folder` or inside it. */
+export function within(path: string, folder: string): boolean {
+  const [inner, outer] = [same(path), same(folder).replace(/\/$/, "")];
+  return inner === outer || inner.startsWith(`${outer}/`);
+}
+
 /** The sessions whose working folder is `folder` or inside it. */
 export function sessionsIn(folder: string, sessions: SessionInfo[]): SessionInfo[] {
-  return sessions.filter(
-    (session) => session.cwd === folder || session.cwd.startsWith(`${folder}/`),
-  );
+  return sessions.filter((session) => within(session.cwd, folder));
 }
 
 /** Whether any of `folders` is `path` or inside it. */
 export function inUse(path: string, folders: string[]): boolean {
-  return folders.some((folder) => folder === path || folder.startsWith(`${path}/`));
+  return folders.some((folder) => within(folder, path));
 }
 
-/** The session id a path sits under, when it is inside a scratch folder `/tmp/claude-<uid>/<project>/<id>/…`. */
+/**
+ * The session id a path sits under, when it is inside a scratch folder:
+ * `/tmp/claude-<uid>/<project>/<id>/…`, or on Windows `%TEMP%\claude\<project>\<id>\…`.
+ */
 export function scratchOwner(path: string): string | null {
-  const match = /^\/tmp\/claude-\d+\/[^/]+\/([0-9a-f-]{36})(?:\/|$)/.exec(path);
+  const match =
+    /^\/tmp\/claude-\d+\/[^/]+\/([0-9a-f-]{36})(?:\/|$)/.exec(path) ??
+    /[\\/]claude[\\/][^\\/]+[\\/]([0-9a-f-]{36})(?:[\\/]|$)/.exec(same(path));
   return match?.[1] ?? null;
 }

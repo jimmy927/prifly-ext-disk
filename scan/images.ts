@@ -9,7 +9,7 @@
  * volumes; compacted, it was 66 GB.
  */
 
-import { powershell } from "./run";
+import { ON_WINDOWS, powershell } from "./run";
 import type { Candidate, Usage } from "./types";
 
 export type DiskImage = {
@@ -73,7 +73,9 @@ function blockersFor(docker: boolean): string[] {
   return [
     docker
       ? "Docker Desktop stops while it runs: every container stops and restarts after"
-      : "`wsl --shutdown` ends every WSL session, prifly's included",
+      : ON_WINDOWS
+        ? "`wsl --shutdown` ends every process in WSL"
+        : "`wsl --shutdown` ends every WSL session, prifly's included",
     "compacting needs an administrator prompt on Windows",
   ];
 }

@@ -2,11 +2,27 @@
 
 import { existsSync } from "node:fs";
 
-export const POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+/** Running on Windows itself, not under WSL: Windows programs start directly, WSL through `wsl.exe`. */
+export const ON_WINDOWS = process.platform === "win32";
+
+const SYSTEM_ROOT = process.env["SystemRoot"] ?? "C:\\Windows";
+
+/** A program under `C:\Windows`, as this host reaches it. */
+export function windowsProgram(path: string): string {
+  return ON_WINDOWS ? `${SYSTEM_ROOT}\\${path.replaceAll("/", "\\")}` : `/mnt/c/Windows/${path}`;
+}
+
+export const POWERSHELL = windowsProgram("System32/WindowsPowerShell/v1.0/powershell.exe");
+
+/**
+ * The folder a Windows program starts from: under WSL a Windows one, or it
+ * warns about UNC paths; on Windows wherever this runs.
+ */
+export const WINDOWS_CWD = ON_WINDOWS ? undefined : "/mnt/c";
 
 /** Under WSL, with Windows reachable: the disk images and Windows drives can be read. */
 export function onWsl(): boolean {
-  return existsSync(POWERSHELL);
+  return !ON_WINDOWS && existsSync(POWERSHELL);
 }
 
 export class CommandFailed extends Error {}
@@ -89,7 +105,7 @@ export async function powershell(script: string, timeoutMs = 120_000): Promise<s
   const out = await run(
     [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
     timeoutMs,
-    "/mnt/c",
+    WINDOWS_CWD,
   );
   return out.replaceAll("\0", "");
 }
