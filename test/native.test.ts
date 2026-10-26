@@ -48,7 +48,8 @@ describe("fastdu's release", () => {
   });
 });
 
-describe("fastdu in C, on Linux", () => {
+// Its Linux build runs only on Linux; on Windows it is run inside WSL by the scan instead.
+describe.skipIf(process.platform !== "linux")("fastdu in C, on Linux", () => {
   test("totals are du's to the byte, hard links once, on one thread and on many", async () => {
     const root = tree();
     for (const threads of [1, 8]) {

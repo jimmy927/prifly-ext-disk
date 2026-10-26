@@ -26,25 +26,29 @@ async function du(path: string): Promise<number> {
 }
 
 describe("the Linux walk", () => {
-  test("every folder's size is what du says, a hard-linked file counted once", async () => {
-    const root = tree();
-    const { sizes, progress } = await walk([root], () => undefined, 4);
-    expect(sizes.get(root)).toBe(await du(root));
-    // A folder's own blocks are counted in it, as du does.
-    expect(sizes.get(join(root, "a", "b", "c"))).toBe(await du(join(root, "a", "b", "c")));
-    // The file with two names is counted once, under whichever name was met
-    // first — as du does, whose order of meeting them may differ.
-    const both = [join(root, "a", "b"), join(root, "empty")];
-    const walked = both.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
-    // One du over both counts the file once, as the walk does.
-    const together = (await run(["du", "-scx", "--block-size=1", ...both]))
-      .trim()
-      .split("\n")
-      .at(-1);
-    expect(walked).toBe(Number(together?.split("\t")[0]));
-    // top, one, deep, and the linked file once.
-    expect(progress.files).toBe(4);
-  });
+  // Allocated blocks and inode numbers as du sees them are Linux's; NTFS through Git Bash's du differs.
+  test.skipIf(process.platform !== "linux")(
+    "every folder's size is what du says, a hard-linked file counted once",
+    async () => {
+      const root = tree();
+      const { sizes, progress } = await walk([root], () => undefined, 4);
+      expect(sizes.get(root)).toBe(await du(root));
+      // A folder's own blocks are counted in it, as du does.
+      expect(sizes.get(join(root, "a", "b", "c"))).toBe(await du(join(root, "a", "b", "c")));
+      // The file with two names is counted once, under whichever name was met
+      // first — as du does, whose order of meeting them may differ.
+      const both = [join(root, "a", "b"), join(root, "empty")];
+      const walked = both.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
+      // One du over both counts the file once, as the walk does.
+      const together = (await run(["du", "-scx", "--block-size=1", ...both]))
+        .trim()
+        .split("\n")
+        .at(-1);
+      expect(walked).toBe(Number(together?.split("\t")[0]));
+      // top, one, deep, and the linked file once.
+      expect(progress.files).toBe(4);
+    },
+  );
 
   test("one thread and many agree", async () => {
     const root = tree();
