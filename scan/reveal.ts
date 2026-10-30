@@ -109,7 +109,8 @@ export function revealCommand(
   if (WINDOWS_PATH.test(path))
     return { error: `${path} is a Windows path, and this is not Windows.` };
   if (host.platform === "darwin")
-    return { program: "open", args: isFile ? ["-R", path] : [path], ignoreExit: false };
+    // -R for folders too: a plain `open` would launch a .app or .photoslibrary bundle.
+    return { program: "open", args: ["-R", path], ignoreExit: false };
   return { program: "xdg-open", args: [isFile ? posix.dirname(path) : path], ignoreExit: false };
 }
 
@@ -159,7 +160,7 @@ export async function reveal(scan: Scan | null, path: unknown): Promise<void> {
       ...(host.wsl && WINDOWS_CWD !== undefined ? { cwd: WINDOWS_CWD } : {}),
       stdin: "ignore",
       stdout: "ignore",
-      stderr: "pipe",
+      stderr: "pipe", // read only if it exits non-zero within LAUNCH_MS
     });
   } catch (error) {
     throw new Error(

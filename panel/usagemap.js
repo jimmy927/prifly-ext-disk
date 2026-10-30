@@ -30,7 +30,7 @@ function revealable(item) {
 async function showIn(item, scan) {
   picked = item.key;
   revealed = { key: item.key, text: `Opening in ${manager}…`, failed: false };
-  drawUsage(scan);
+  drawUsage(shown ?? scan);
   try {
     const response = await fetch("api/reveal", {
       method: "POST",

@@ -102,10 +102,15 @@ describe("what is started", () => {
     );
   });
 
-  test("macOS: open for a folder, open -R for a file", () => {
+  test("macOS: open -R for a folder, a .app bundle and a file, so none is launched", () => {
     expect(revealCommand(onMac, "/Users/jimmy/Library", false)).toEqual({
       program: "open",
-      args: ["/Users/jimmy/Library"],
+      args: ["-R", "/Users/jimmy/Library"],
+      ignoreExit: false,
+    });
+    expect(revealCommand(onMac, "/Applications/Xcode.app", false)).toEqual({
+      program: "open",
+      args: ["-R", "/Applications/Xcode.app"],
       ignoreExit: false,
     });
     expect(revealCommand(onMac, "/Users/jimmy/big.dmg", true)).toEqual({
