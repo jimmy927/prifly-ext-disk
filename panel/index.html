@@ -31,26 +31,22 @@
       <p class="error" id="error" hidden></p>
       <div class="parts" id="parts" aria-live="polite"></div>
       <section>
-        <h2>Drives</h2>
-        <div class="drives" id="drives"></div>
-      </section>
-      <div class="columns">
-        <section>
+        <div class="maphead">
           <h2>What takes the space</h2>
           <div class="tabs" id="tabs" role="tablist"></div>
-          <div class="usage" id="usage"></div>
-        </section>
-        <section>
-          <h2>Could be cleaned <span class="sum" id="cleanable"></span></h2>
-          <p class="hint">
-            <b>Clean up</b> starts a session in its own window that checks the item again, asks you
-            once and cleans it — start as many as you like and close this window. Asking any
-            session to "clean up disk space" proposes from the whole list instead.
-          </p>
-          <div id="candidates"></div>
-          <ul class="notes" id="notes"></ul>
-        </section>
-      </div>
+        </div>
+        <div class="usage" id="usage"></div>
+      </section>
+      <section>
+        <h2>Could be cleaned <span class="sum" id="cleanable"></span></h2>
+        <p class="hint">
+          <b>Clean up</b> starts a session in its own window that checks the item again, asks you
+          once and cleans it — start as many as you like and close this window. Asking any session
+          to "clean up disk space" proposes from the whole list instead.
+        </p>
+        <div id="candidates"></div>
+        <ul class="notes" id="notes"></ul>
+      </section>
     </div>
     <script type="module" src="app.js"></script>
   </body>

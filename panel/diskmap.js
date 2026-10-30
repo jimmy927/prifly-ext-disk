@@ -3,8 +3,9 @@
 // byte twice. A folder's tile is as big as the folder; the folders inside it
 // are tiles inside it, and what they leave of it is an "other files" tile. At
 // the top, next to the biggest folders: what the drive uses outside them, and
-// its free space. The "Could be cleaned" items are attached to the tile that
-// holds them. usagemap.js draws it with treemap.js.
+// its free space. WSL's own drive is drawn inside its disk image's tile on
+// the Windows drive that holds the image. The "Could be cleaned" items are
+// attached to the tile that holds them. usagemap.js draws it with treemap.js.
 
 import { bytes } from "./format.js";
 
@@ -22,14 +23,6 @@ export function norm(path) {
   const p = path.replaceAll("\\", "/").toLowerCase().replace(/\/+$/, "");
   const mount = /^\/mnt\/([a-z])(?=\/|$)/.exec(p);
   return mount === null ? p : `${mount[1]}:${p.slice(6)}`;
-}
-
-/** The items not inside another listed item: what a drive's bar can stack without counting twice. */
-export function outermost(items) {
-  const paths = items.map((item) => norm(item.path));
-  return items.filter((_, i) =>
-    paths.every((other, j) => j === i || !paths[i].startsWith(`${other}/`)),
-  );
 }
 
 /**
@@ -126,9 +119,10 @@ function* tiles(tile) {
 
 /**
  * The tile a candidate's bytes come out of: the deepest folder holding its
- * path (a database's "dir (name)" by its dir), and for Docker's own cleanups,
- * which name a command rather than a path, the Docker data disk image. Null
- * where the map has no such tile.
+ * path anywhere in the tree (a database's "dir (name)" by its dir), and for
+ * Docker's own cleanups, which name a command rather than a path, the Docker
+ * data disk image. A disk image's trim is on the image's "unused in the image"
+ * tile where it has one. Null where the map has no such tile.
  */
 export function homeOf(root, candidate) {
   if (candidate.kind === "docker-cache" || candidate.kind === "docker-images") {
@@ -136,15 +130,18 @@ export function homeOf(root, candidate) {
     return null;
   }
   const target = norm(candidate.path.replace(/ \([^)]*\)$/, ""));
-  let at = root;
-  for (;;) {
-    const next = (at.children ?? []).find(
-      (c) => c.kind === "folder" && (target === c.key || target.startsWith(`${c.key}/`)),
-    );
-    if (next === undefined) break;
-    at = next;
-  }
-  return at === root ? null : at;
+  const holding = [...tiles(root)].filter(
+    (tile) => tile.kind === "folder" && (target === tile.key || target.startsWith(`${tile.key}/`)),
+  );
+  const best = holding.reduce(
+    (deepest, tile) =>
+      deepest === undefined || tile.key.length > deepest.key.length ? tile : deepest,
+    undefined,
+  );
+  // A trim frees the image's unused blocks: the tile that shows them.
+  if (best !== undefined && candidate.kind === "disk-image")
+    return best.children?.find((c) => c.kind === "unused") ?? best;
+  return best ?? null;
 }
 
 /** Each candidate on its tile, as `tile.clean`: the items, and what they free, never more than the tile. */
@@ -177,12 +174,72 @@ export function cleanWithin(tile) {
   return Math.min(total, tile.value);
 }
 
+const WSL = "WSL";
+const WSL_IMAGE = /^wsl disk image/i;
+
+/**
+ * Where WSL's drive is drawn: the first WSL disk image the scan lists on
+ * another drive, with the WSL drive. The scan names one WSL drive and no
+ * distro on it, so with several images it goes into the first. Null where
+ * there is no image, no WSL drive, or the image holds less than WSL uses.
+ */
+function linuxHome(scan) {
+  const linux = scan.drives.find((drive) => drive.label === WSL);
+  const image = scan.usage.find((item) => item.drive !== WSL && WSL_IMAGE.test(item.what));
+  if (linux === undefined || image === undefined || linux.usedBytes > image.bytes) return null;
+  return { linux, image };
+}
+
+/** The drives that get a tab: all but WSL's, which is inside its disk image where it has one. */
+export function tabsOf(scan) {
+  const home = linuxHome(scan);
+  return scan.drives.map((drive) => drive.label).filter((label) => home === null || label !== WSL);
+}
+
+/**
+ * WSL's drive inside its disk image's tile: Linux's folders in a colour of
+ * their own, what Linux uses outside them, and the image's blocks Linux no
+ * longer uses, which a trim gives back. They add up to the image's tile.
+ */
+function graftLinux(root, scan, label) {
+  const home = linuxHome(scan);
+  if (home === null || home.image.drive !== label) return;
+  const tile = [...tiles(root)].find((each) => each.key === norm(home.image.path));
+  if (tile === undefined) return;
+  const folders = nest(scan.usage.filter((item) => item.drive === WSL))
+    .map((n) => folderTile(n, "c5"))
+    .sort(bySize);
+  const children = [...folders];
+  const other = home.linux.usedBytes - sum(folders);
+  if (other >= SMALLEST)
+    children.push({
+      key: `${tile.key}#linux-other`,
+      kind: "rest",
+      name: "other Linux files",
+      value: other,
+      colour: "c5 rest",
+      why: "Used inside WSL but in none of the folders the scan lists on its own: smaller folders, and files.",
+    });
+  const unused = tile.value - home.linux.usedBytes;
+  if (unused >= SMALLEST)
+    children.push({
+      key: `${tile.key}#unused`,
+      kind: "unused",
+      name: "unused in the image",
+      value: unused,
+      colour: "k-free",
+      why: "Blocks the image still takes on the drive that Linux has freed: a trim gives them back.",
+    });
+  if (children.length > 0) tile.children = children;
+}
+
 /**
  * The map of drive `label` in `scan`: a root tile (key "#root") whose
  * children are the drive's outermost folders, biggest first, each in a
  * colour of its own that its children keep; what the drive uses outside them
- * ("#other"); and its free space ("#free"). Null where the scan has no such
- * drive or measured no folder on it.
+ * ("#other"); and its free space ("#free"). The drive's WSL disk image holds
+ * WSL's folders (`graftLinux`). Null where the scan has no such drive or
+ * measured no folder on it.
  */
 export function driveTree(scan, label) {
   const drive = scan.drives.find((each) => each.label === label);
@@ -222,10 +279,9 @@ export function driveTree(scan, label) {
     why: `${bytes(drive.usedBytes)} used and ${bytes(drive.freeBytes)} free of ${bytes(drive.sizeBytes)}.`,
     children,
   };
-  attach(
-    root,
-    scan.candidates.filter((candidate) => candidate.drive === label),
-  );
+  graftLinux(root, scan, label);
+  // Every candidate, each on the deepest tile holding its path: WSL's too, on the Linux tiles.
+  attach(root, scan.candidates);
   return root;
 }
 

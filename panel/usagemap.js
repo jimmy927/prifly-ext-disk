@@ -1,16 +1,21 @@
 // "What takes the space": a drive's folders as a treemap (diskmap.js's model,
-// drawn by treemap.js), one drive at a time by its tab. A click on a folder
+// drawn by treemap.js) as wide and as tall as the window, one drive at a time
+// by its tab (no tabs where there is one drive). A click on a folder
 // that holds others zooms into it, the breadcrumb above leads back up, and a
 // click on any other tile says what it is in the detail. Tiles that hold
 // something "Could be cleaned" lists are striped as far as it frees. A
 // right-click on a folder or file opens a menu, and its detail a button, to
 // show it in the system's file manager (`api/reveal`).
 
-import { cleanNote, cleanWithin, driveTree, trail } from "./diskmap.js";
+import { cleanNote, cleanWithin, driveTree, tabsOf, trail } from "./diskmap.js";
 import { bytes, el } from "./format.js";
 import { detail, find, layoutIn, treemap } from "./treemap.js";
 
 const $ = (id) => document.getElementById(id);
+
+/** The room kept under the map for its legend and the page's foot, and the least height it gets. */
+const BELOW_MAP = 90;
+const MIN_HEIGHT = 420;
 
 /** The drive shown, the tile zoomed into on each drive, the tile picked: kept across redraws. */
 let tab = null;
@@ -82,10 +87,11 @@ addEventListener("keydown", (event) => {
 });
 
 function drawTabs(scan) {
-  const labels = scan.drives.map((drive) => drive.label);
+  const labels = tabsOf(scan);
   if (tab === null || !labels.includes(tab)) tab = labels[0] ?? null;
+  // One drive needs no tab to choose it.
   $("tabs").replaceChildren(
-    ...labels.map((name) => {
+    ...(labels.length < 2 ? [] : labels).map((name) => {
       const button = el(
         "button",
         { class: "tab", role: "tab", "aria-selected": String(name === tab) },
@@ -170,7 +176,24 @@ function childTable(children) {
   );
 }
 
+/** The way back up, and at the right end what the drive holds. */
 function crumbs(path, scan) {
+  const drive = scan.drives.find((each) => each.label === tab);
+  return el(
+    "div",
+    { class: "crumbline" },
+    trailNav(path, scan),
+    drive === undefined
+      ? null
+      : el(
+          "span",
+          { class: "status" },
+          `${bytes(drive.usedBytes)} used · ${bytes(drive.freeBytes)} free of ${bytes(drive.sizeBytes)}`,
+        ),
+  );
+}
+
+function trailNav(path, scan) {
   return el(
     "nav",
     { class: "crumbs", "aria-label": "Where in the drive" },
@@ -200,7 +223,7 @@ function drawMap(scan) {
     message(
       drive === undefined
         ? "The scan found no drive to map."
-        : `The scan measured no folder on ${tab} — ${bytes(drive.usedBytes)} used, ${bytes(drive.freeBytes)} free; the drive's bar above is all there is.`,
+        : `The scan measured no folder on ${tab} — ${bytes(drive.usedBytes)} used, ${bytes(drive.freeBytes)} free.`,
     );
     return;
   }
@@ -209,7 +232,10 @@ function drawMap(scan) {
   const at = zoomed?.children ? zoomed : root;
   const items = at.children;
   const pickedTile = picked === null ? null : find(items, picked);
-  const { narrow, width, height } = layoutIn($("usage").clientWidth || 640);
+  const { narrow, width } = layoutIn($("usage").clientWidth || 640);
+  // From the map's top to the window's foot, whatever is scrolled away.
+  const top = $("usage").getBoundingClientRect().top + scrollY;
+  const height = Math.max(MIN_HEIGHT, Math.round(innerHeight - top - BELOW_MAP));
   const map = treemap(items, width, height, {
     picked: pickedTile?.key ?? null,
     pick: (key) => {
@@ -268,7 +294,7 @@ export function usageMessage(text) {
   message(text);
 }
 
-// The map is laid out to its column's width: again when the window changes it.
+// The map is laid out to the window's width and height: again when the window changes.
 let resizing = 0;
 addEventListener("resize", () => {
   cancelAnimationFrame(resizing);

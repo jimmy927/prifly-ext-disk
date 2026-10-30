@@ -2,7 +2,16 @@
 // layout it is drawn with (panel/treemap.js, copied from prifly-ext-perf).
 
 import { describe, expect, test } from "bun:test";
-import { cleanNote, cleanWithin, driveTree, homeOf, nest, norm, trail } from "../panel/diskmap.js";
+import {
+  cleanNote,
+  cleanWithin,
+  driveTree,
+  homeOf,
+  nest,
+  norm,
+  tabsOf,
+  trail,
+} from "../panel/diskmap.js";
 import { find, squarify } from "../panel/treemap.js";
 
 const GB = 1e9;
@@ -177,7 +186,8 @@ describe("driveTree", () => {
     }
     const paths = all(c).flatMap((t) => (t.path === undefined ? [] : [norm(t.path)]));
     expect(new Set(paths).size).toBe(paths.length);
-    expect(paths.length).toBe(8);
+    // The eight Windows paths, and the three Linux folders inside the WSL image.
+    expect(paths.length).toBe(11);
   });
 
   test("the remainder tile is what the children leave of their parent", () => {
@@ -195,7 +205,11 @@ describe("driveTree", () => {
 
   test("a top-level folder's colour is kept by everything inside it", () => {
     const users = find(c.children, "c:/users");
-    const inside = all(users).map((t) => t.colour.split(" ")[0]);
+    // Except WSL's own folders inside the disk image, which have a colour of their own.
+    const image = find(users.children, norm(IMAGE));
+    const inside = all(users)
+      .filter((t) => !all(image).includes(t) || t === image)
+      .map((t) => t.colour.split(" ")[0]);
     expect(new Set(inside)).toEqual(new Set([users.colour]));
     expect(find(c.children, "c:/program files").colour).not.toBe(users.colour);
   });
@@ -208,13 +222,14 @@ describe("driveTree", () => {
 });
 
 describe("cleanable marks", () => {
-  test("a disk image's trim sits on the image's own tile, with its line", () => {
+  test("a disk image's trim sits on its unused tile, with its line", () => {
     const c = driveTree(fixture(), "C:");
-    const image = find(c.children, norm(IMAGE));
-    expect(image.clean.bytes).toBe(87 * GB);
-    expect(cleanNote(image)).toBe("87 GB could be freed by trimming");
+    const unused = find(c.children, `${norm(IMAGE)}#unused`);
+    expect(unused.clean.bytes).toBe(87 * GB);
+    expect(cleanNote(unused)).toBe("87 GB could be freed by trimming");
+    expect(find(c.children, norm(IMAGE)).clean).toBeUndefined();
     expect(cleanNote(find(c.children, "c:/users/jimmy"))).toBeNull();
-    expect(cleanWithin(find(c.children, "c:/users"))).toBe(112 * GB);
+    expect(cleanWithin(find(c.children, "c:/users"))).toBe(127 * GB);
   });
 
   test("Docker's cleanups, which name a command, sit on the Docker data disk", () => {
@@ -239,8 +254,8 @@ describe("cleanable marks", () => {
     scan.candidates.push({ ...scan.candidates[0], id: "x", path: "D:\\x", bytes: 1 });
     scan.candidates.push({ ...scan.candidates[0], id: "y", bytes: 900 * GB });
     const c = driveTree(scan, "C:");
-    const image = find(c.children, norm(IMAGE));
-    expect(image.clean.bytes).toBe(466 * GB);
+    // The trim cannot free more than the image has unused: 466 - 300 GB.
+    expect(find(c.children, `${norm(IMAGE)}#unused`).clean.bytes).toBe(166 * GB);
     expect(homeOf(c, scan.candidates.at(-2))).toBeNull();
   });
 
@@ -260,6 +275,113 @@ describe("cleanable marks", () => {
     });
     const wsl = driveTree(scan, "WSL");
     expect(homeOf(wsl, scan.candidates.at(-1))?.key).toBe("/var/lib/postgresql");
+  });
+});
+
+describe("WSL inside its disk image", () => {
+  const scan = fixture();
+  const c = driveTree(scan, "C:");
+  const image = find(c.children, norm(IMAGE));
+
+  test("the image holds Linux's folders, the rest of what Linux uses, and what it no longer uses", () => {
+    expect(keys(image)).toEqual([
+      "/home/jimmy",
+      "/tmp/claude-1000",
+      `${image.key}#linux-other`,
+      `${image.key}#unused`,
+    ]);
+    expect(find(image.children, "/home/jimmy").children.map((t) => t.name)).toEqual([
+      "src",
+      "other files",
+    ]);
+    // Linux uses 300 GB: 200 + 40 in the folders listed, 60 outside them.
+    expect(find(image.children, `${image.key}#linux-other`).value).toBe(60 * GB);
+    expect(find(image.children, `${image.key}#linux-other`).name).toBe("other Linux files");
+  });
+
+  test("nothing is counted twice: the image tile keeps its size and its children add up to it", () => {
+    expect(image.value).toBe(466 * GB);
+    expect(sum(image.children)).toBe(image.value);
+    expect(c.value).toBe(1000 * GB);
+    const paths = all(c).flatMap((t) => (t.path === undefined ? [] : [t.key]));
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  test("the unused tile is the image less what Linux uses, and the folders keep their own colour", () => {
+    const unused = find(image.children, `${image.key}#unused`);
+    expect(unused.value).toBe((466 - 300) * GB);
+    expect(unused.name).toBe("unused in the image");
+    expect(unused.colour).toBe("k-free");
+    for (const tile of all(find(image.children, "/home/jimmy")))
+      expect(tile.colour.split(" ")[0]).toBe("c5");
+    expect(find(c.children, "c:/users").colour).not.toContain("c5");
+  });
+
+  test("the trim candidate is on the unused tile only", () => {
+    const trim = scan.candidates[0];
+    expect(homeOf(c, trim)?.key).toBe(`${image.key}#unused`);
+    expect(image.clean).toBeUndefined();
+  });
+
+  test("a WSL candidate is on the Linux tile holding its path, however deep", () => {
+    const scratch = find(c.children, "/tmp/claude-1000");
+    expect(scratch.clean.items.map((i) => i.id)).toEqual(["scratch:a", "scratch:b"]);
+    expect(cleanNote(scratch)).toBe("15 GB could be freed by clearing scratch folders");
+    const worktree = { ...scan.candidates[2], kind: "worktree", path: "/home/jimmy/src/x/y" };
+    expect(homeOf(c, worktree)?.key).toBe("/home/jimmy/src");
+    // The image's trim and the cleanup of Linux folders both count in the C: drive's totals.
+    expect(cleanWithin(image)).toBe((87 + 15) * GB);
+  });
+
+  test("the WSL drive has no tab of its own once it is in the image", () => {
+    expect(tabsOf(scan)).toEqual(["C:", "D:"]);
+  });
+
+  test("with no WSL disk image on the scan, nothing is grafted and WSL keeps its tab", () => {
+    const bare = fixture();
+    bare.usage = bare.usage.filter((item) => item.path !== IMAGE);
+    const tree = driveTree(bare, "C:");
+    expect(find(tree.children, "/home/jimmy")).toBeNull();
+    expect(tabsOf(bare)).toEqual(["C:", "WSL", "D:"]);
+  });
+
+  test("with no WSL drive on the scan, the image stays a plain tile", () => {
+    const bare = fixture();
+    bare.drives = bare.drives.filter((drive) => drive.label !== "WSL");
+    const tree = driveTree(bare, "C:");
+    expect(find(tree.children, norm(IMAGE)).children).toBeUndefined();
+    expect(tabsOf(bare)).toEqual(["C:", "D:"]);
+  });
+
+  test("an image smaller than what Linux uses is left as it is", () => {
+    const odd = fixture();
+    odd.drives.find((drive) => drive.label === "WSL").usedBytes = 500 * GB;
+    expect(find(driveTree(odd, "C:").children, norm(IMAGE)).children).toBeUndefined();
+    expect(tabsOf(odd)).toContain("WSL");
+  });
+
+  test("several images: Linux goes into the first the scan lists, once", () => {
+    const two = fixture();
+    two.usage.push({
+      drive: "D:",
+      path: "D:\\vm\\ext4.vhdx",
+      bytes: 100 * GB,
+      what: "WSL disk image (Debian)",
+    });
+    expect(find(driveTree(two, "C:").children, norm(IMAGE)).children).toBeDefined();
+    expect(find(driveTree(two, "D:").children, "d:/vm/ext4.vhdx").children).toBeUndefined();
+  });
+
+  test("the breadcrumb runs through the image into a Linux folder", () => {
+    expect(trail(c, "/home/jimmy/src").map((t) => t.name)).toEqual([
+      "C:",
+      "Users",
+      "jimmy",
+      "AppData",
+      "WSL disk image (Ubuntu-20.04)",
+      "jimmy",
+      "src",
+    ]);
   });
 });
 

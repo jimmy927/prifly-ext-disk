@@ -1,14 +1,12 @@
-// The Disk space window: drives, what takes their space, and what could be
+// The Disk space window: what takes the space on the drives, and what could be
 // cleaned. Data comes from `api/status`; `api/rescan` and `api/deep` start
 // scans, and the page polls while one runs. What takes the space is a
 // treemap of its own (usagemap.js).
 
-import { nameOf, outermost } from "./diskmap.js";
 import { bytes, el } from "./format.js";
 import { drawUsage, usageMessage } from "./usagemap.js";
 
 const $ = (id) => document.getElementById(id);
-const COLOURS = ["--s0", "--s1", "--s2", "--s3", "--s4", "--s5"];
 const SAFETY = {
   safe: "Safe — nothing is lost",
   check: "Check first — something may be lost",
@@ -26,74 +24,6 @@ function ago(at) {
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
-}
-
-function driveCard(drive, usage) {
-  const top = outermost(usage.filter((item) => item.drive === drive.label)).slice(
-    0,
-    COLOURS.length,
-  );
-  const known = top.reduce((sum, item) => sum + item.bytes, 0);
-  const other = Math.max(0, drive.usedBytes - known);
-  const pct = (n) => `${(100 * n) / drive.sizeBytes}%`;
-  const meter = el("div", { class: "meter" });
-  const legend = el("div", { class: "legend" });
-  top.forEach((item, i) => {
-    const colour = `var(${COLOURS[i]})`;
-    meter.append(
-      el("span", {
-        style: `width:${pct(item.bytes)};background:${colour}`,
-        title: `${item.path} — ${bytes(item.bytes)}`,
-      }),
-    );
-    legend.append(
-      el(
-        "span",
-        {},
-        el("span", { class: "swatch", style: `background:${colour}` }),
-        `${nameOf(item)} ${bytes(item.bytes)}`,
-      ),
-    );
-  });
-  meter.append(
-    el("span", { style: `width:${pct(other)};background:var(--other)`, title: "everything else" }),
-  );
-  legend.append(
-    el(
-      "span",
-      {},
-      el("span", { class: "swatch", style: "background:var(--other)" }),
-      `other ${bytes(other)}`,
-    ),
-  );
-  legend.append(
-    el(
-      "span",
-      {},
-      el("span", { class: "swatch", style: "background:var(--free)" }),
-      `free ${bytes(drive.freeBytes)}`,
-    ),
-  );
-  return el(
-    "div",
-    { class: "drive" },
-    el(
-      "div",
-      { class: "drive-head" },
-      el("span", { class: "drive-name" }, drive.label),
-      el(
-        "span",
-        { class: "status" },
-        `${bytes(drive.freeBytes)} free of ${bytes(drive.sizeBytes)}`,
-      ),
-    ),
-    meter,
-    legend,
-  );
-}
-
-function drawDrives(scan) {
-  $("drives").replaceChildren(...scan.drives.map((drive) => driveCard(drive, scan.usage)));
 }
 
 /**
@@ -222,16 +152,9 @@ function draw(state) {
   drawStatus(state);
   if (state.scan === null) {
     // A scan runs only when asked (index.ts): until one has, there is nothing to draw.
-    const drives = state.scanning
-      ? "Reading the drives…"
-      : state.error !== ""
-        ? "No drive read — the scan failed."
-        : "Not scanned yet — Scan now reads every drive.";
-    $("drives").replaceChildren(el("p", { class: "hint" }, drives));
     usageMessage(noMapYet(state));
     return;
   }
-  drawDrives(state.scan);
   drawUsage(state.scan, state.fileManager);
   drawCandidates(state.scan);
 }

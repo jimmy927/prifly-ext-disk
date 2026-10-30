@@ -151,62 +151,19 @@ h2 {
 .part.failed .detail {
   color: #e34948;
 }
-.drives {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+/* The map's heading with the drives' tabs beside it, and the breadcrumb row
+   with what the drive holds at its right end (usagemap.js). */
+.maphead,
+.crumbline {
+  display: flex;
+  align-items: baseline;
   gap: 12px;
 }
-.drive {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--card);
-}
-.drive-head {
-  display: flex;
+.crumbline {
   justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 6px;
 }
-.drive-name {
-  font-weight: 600;
-  font-size: 14px;
-}
-.meter {
-  display: flex;
-  height: 14px;
-  border-radius: 4px;
-  overflow: hidden;
-  background: var(--free);
-}
-.meter > span {
-  height: 100%;
-}
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-top: 6px;
-  color: var(--muted-fg);
-  font-size: 12px;
-}
-.swatch {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  margin-right: 4px;
-}
-
-.columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-  gap: 20px;
-}
-@media (max-width: 900px) {
-  .columns {
-    grid-template-columns: 1fr;
-  }
+.maphead .tabs {
+  margin-bottom: 0;
 }
 .tabs {
   display: flex;
