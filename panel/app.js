@@ -1,6 +1,11 @@
 // The Disk space window: drives, what takes their space, and what could be
 // cleaned. Data comes from `api/status`; `api/rescan` and `api/deep` start
-// scans, and the page polls while one runs.
+// scans, and the page polls while one runs. What takes the space is a
+// treemap of its own (usagemap.js).
+
+import { nameOf, outermost } from "./diskmap.js";
+import { bytes, el } from "./format.js";
+import { drawUsage, usageMessage } from "./usagemap.js";
 
 const $ = (id) => document.getElementById(id);
 const COLOURS = ["--s0", "--s1", "--s2", "--s3", "--s4", "--s5"];
@@ -11,35 +16,9 @@ const SAFETY = {
 };
 
 let last = null;
-let tab = null;
 let polling = null;
 /** The keys a cleanup session was started for while this page is open. */
 const started = new Set();
-
-function bytes(n) {
-  const units = ["B", "kB", "MB", "GB", "TB"];
-  let value = n;
-  let unit = 0;
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000;
-    unit += 1;
-  }
-  const shown = value >= 100 ? Math.round(value).toString() : value.toPrecision(2);
-  return `${shown} ${units[unit]}`;
-}
-
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (key === "class") node.className = value;
-    else if (key === "style") node.style.cssText = value;
-    else node.setAttribute(key, value);
-  }
-  for (const child of children) {
-    if (child !== null && child !== undefined) node.append(child);
-  }
-  return node;
-}
 
 function ago(at) {
   const minutes = Math.round((Date.now() - at) / 60_000);
@@ -47,19 +26,6 @@ function ago(at) {
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
-}
-
-/** A path with `/` and lower case, so Windows and Linux paths compare alike. */
-function norm(path) {
-  return path.replaceAll("\\", "/").toLowerCase().replace(/\/$/, "");
-}
-
-/** The items not inside another listed item: what a drive's bar can stack without counting twice. */
-function outermost(items) {
-  const paths = items.map((item) => norm(item.path));
-  return items.filter((_, i) =>
-    paths.every((other, j) => j === i || !paths[i].startsWith(`${other}/`)),
-  );
 }
 
 function driveCard(drive, usage) {
@@ -85,7 +51,7 @@ function driveCard(drive, usage) {
         "span",
         {},
         el("span", { class: "swatch", style: `background:${colour}` }),
-        `${label(item)} ${bytes(item.bytes)}`,
+        `${nameOf(item)} ${bytes(item.bytes)}`,
       ),
     );
   });
@@ -126,52 +92,8 @@ function driveCard(drive, usage) {
   );
 }
 
-function label(item) {
-  if (item.what !== "folder") return item.what;
-  return item.path.split(/[\\/]/).filter(Boolean).at(-1) ?? item.path;
-}
-
 function drawDrives(scan) {
   $("drives").replaceChildren(...scan.drives.map((drive) => driveCard(drive, scan.usage)));
-}
-
-function drawUsage(scan) {
-  const labels = scan.drives.map((drive) => drive.label);
-  if (tab === null || !labels.includes(tab)) tab = labels[0] ?? null;
-  $("tabs").replaceChildren(
-    ...labels.map((name) => {
-      const button = el(
-        "button",
-        { class: "tab", role: "tab", "aria-selected": String(name === tab) },
-        name,
-      );
-      button.addEventListener("click", () => {
-        tab = name;
-        drawUsage(scan);
-      });
-      return button;
-    }),
-  );
-  const items = scan.usage.filter((item) => item.drive === tab).slice(0, 25);
-  const biggest = items[0]?.bytes ?? 1;
-  $("usage").replaceChildren(
-    ...items.map((item) =>
-      el(
-        "div",
-        { class: "row" },
-        el("span", { class: "size" }, bytes(item.bytes)),
-        el(
-          "span",
-          {},
-          el("div", { class: "path" }, item.path),
-          item.what === "folder" ? null : el("div", { class: "what" }, item.what),
-        ),
-        el("span", { class: "bar-line", style: `width:${(100 * item.bytes) / biggest}%` }),
-      ),
-    ),
-  );
-  if (items.length === 0)
-    $("usage").append(el("p", { class: "hint" }, "Nothing big found here yet."));
 }
 
 /**
@@ -287,13 +209,26 @@ function drawStatus(state) {
   drawParts(state);
 }
 
+/** In the map's place before any scan has finished: running, failed, or not asked for yet. */
+function noMapYet(state) {
+  if (state.scanning) return "Scanning… the map of what takes the space appears when it is done.";
+  if (state.error !== "")
+    return "The scan failed, so there is nothing to map — the error is above; Scan now tries again.";
+  return "Not scanned yet. Scan now maps what takes the space on each drive.";
+}
+
 function draw(state) {
   last = state;
   drawStatus(state);
   if (state.scan === null) {
-    $("drives").replaceChildren(
-      el("p", { class: "hint" }, "The first scan runs a few seconds after prifly starts."),
-    );
+    // A scan runs only when asked (index.ts): until one has, there is nothing to draw.
+    const drives = state.scanning
+      ? "Reading the drives…"
+      : state.error !== ""
+        ? "No drive read — the scan failed."
+        : "Not scanned yet — Scan now reads every drive.";
+    $("drives").replaceChildren(el("p", { class: "hint" }, drives));
+    usageMessage(noMapYet(state));
     return;
   }
   drawDrives(state.scan);
@@ -319,6 +254,8 @@ async function refresh(path = "status") {
   } catch (error) {
     $("error").hidden = false;
     $("error").textContent = String(error.message ?? error);
+    // Never answered yet: the map's place says so rather than staying blank.
+    if (last === null) usageMessage("The window could not read the scan — the error is above.");
   }
 }
 

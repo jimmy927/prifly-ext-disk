@@ -253,11 +253,112 @@ h2 {
   font-size: 12px;
   white-space: nowrap;
 }
-.bar-line {
-  grid-column: 2;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--s0);
+/* What takes the space (usagemap.js): the treemap's tiles (treemap.css) in
+   the drive bars' colours, a top-level folder's children in its colour. */
+.usage .mbody {
+  padding: 4px 0 0;
+}
+.c0 {
+  --c: var(--s0);
+}
+.c1 {
+  --c: var(--s1);
+}
+.c2 {
+  --c: var(--s2);
+}
+.c3 {
+  --c: var(--s3);
+}
+.c4 {
+  --c: var(--s4);
+}
+.c5 {
+  --c: var(--s5);
+}
+.mtile {
+  background: var(--c, var(--other));
+}
+.mtile.rest {
+  background: color-mix(in srgb, var(--c) 35%, var(--card));
+  color: var(--fg);
+}
+.mtile.k-other {
+  background: var(--other);
+}
+.mtile.k-free {
+  background: var(--free);
+  color: var(--muted-fg);
+}
+/* A folder's name stays on its one line, above the folders inside it. */
+.mtile.group > .mlabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mtile.rest .mlabel,
+.mtile.k-free .mlabel {
+  text-shadow: none;
+}
+/* The part of a tile that could be freed, striped from its foot up. */
+.mtile .cleanable {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(255 255 255 / 0.55) 0 5px,
+    rgb(255 255 255 / 0.2) 5px 10px
+  );
+}
+.mtile.group > .cleanable,
+.mtile.rest > .cleanable {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--safe) 45%, transparent) 0 5px,
+    transparent 5px 10px
+  );
+}
+.mlegend .sw.striped {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--s0) 35%, var(--card)) 0 4px,
+    color-mix(in srgb, var(--s0) 75%, var(--card)) 4px 8px
+  );
+}
+.mdetail .freed {
+  margin: 2px 0;
+  color: var(--safe);
+}
+.mdetail p {
+  overflow-wrap: anywhere;
+}
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  font-size: 12px;
+  min-height: 22px;
+}
+.crumbs .crumb {
+  font: inherit;
+  color: var(--downtime);
+  background: none;
+  border: 0;
+  padding: 1px 2px;
+  cursor: pointer;
+}
+.crumbs .crumb:hover {
+  text-decoration: underline;
+}
+.crumbs .sep {
+  color: var(--muted-fg);
+}
+.crumbs [aria-current] {
+  font-weight: 600;
 }
 .what,
 .why {
