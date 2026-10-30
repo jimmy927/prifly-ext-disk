@@ -24,6 +24,7 @@ import { readCache } from "./scan/cache";
 import { type Running, ScanStopped, scanOffThread } from "./scan/off-thread";
 import type { Part } from "./scan/progress";
 import { cleanupPrompt } from "./scan/prompt";
+import { reveal, thisFileManager } from "./scan/reveal";
 import { isLive, withArchived } from "./scan/sessions";
 import type { Scan } from "./scan/types";
 
@@ -126,6 +127,8 @@ function status(current: State) {
   return {
     scan: current.last,
     scanning: current.running !== null,
+    /** What the window's "Show in …" menu calls the file manager. */
+    fileManager: thisFileManager(),
     parts: current.parts,
     error: current.error,
   };
@@ -140,6 +143,11 @@ export async function panel(_panelId: string, request: PanelRequest): Promise<un
     case "rescan":
       void rescan(current).catch(() => undefined);
       return status(current);
+    case "reveal": {
+      const body = request.body as { path?: unknown } | null;
+      await reveal(current.last, body?.path);
+      return { ok: true };
+    }
     default:
       throw new Error(`No such request: ${request.path}`);
   }

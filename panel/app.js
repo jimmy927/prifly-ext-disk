@@ -232,7 +232,7 @@ function draw(state) {
     return;
   }
   drawDrives(state.scan);
-  drawUsage(state.scan);
+  drawUsage(state.scan, state.fileManager);
   drawCandidates(state.scan);
 }
 

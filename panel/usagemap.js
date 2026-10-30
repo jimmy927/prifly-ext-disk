@@ -2,7 +2,9 @@
 // drawn by treemap.js), one drive at a time by its tab. A click on a folder
 // that holds others zooms into it, the breadcrumb above leads back up, and a
 // click on any other tile says what it is in the detail. Tiles that hold
-// something "Could be cleaned" lists are striped as far as it frees.
+// something "Could be cleaned" lists are striped as far as it frees. A
+// right-click on a folder or file opens a menu, and its detail a button, to
+// show it in the system's file manager (`api/reveal`).
 
 import { cleanNote, cleanWithin, driveTree, trail } from "./diskmap.js";
 import { bytes, el } from "./format.js";
@@ -15,6 +17,69 @@ let tab = null;
 const zoom = new Map();
 let picked = null;
 let shown = null;
+/** What the file manager is called here ("Explorer", "Finder", "Files"), from `api/status`. */
+let manager = "file manager";
+/** The last "show in" outcome, for the tile it was asked for: `{ key, text, failed }`. */
+let revealed = null;
+
+/** A tile that is a real folder or file: "Other files" and "Free space" have no path. */
+function revealable(item) {
+  return item.kind === "folder" && typeof item.path === "string";
+}
+
+async function showIn(item, scan) {
+  picked = item.key;
+  revealed = { key: item.key, text: `Opening in ${manager}…`, failed: false };
+  drawUsage(scan);
+  try {
+    const response = await fetch("api/reveal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: item.path }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? response.statusText);
+    revealed = { key: item.key, text: `Shown in ${manager}.`, failed: false };
+  } catch (error) {
+    revealed = { key: item.key, text: String(error.message ?? error), failed: true };
+  }
+  if (shown !== null) drawUsage(shown);
+}
+
+let menu = null;
+
+function closeMenu() {
+  menu?.remove();
+  menu = null;
+}
+
+/** The small menu at the pointer: one entry, "Show in Explorer". */
+function openMenu(event, item, scan) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeMenu();
+  const entry = el(
+    "button",
+    { type: "button", class: "ctx-item", role: "menuitem" },
+    `Show in ${manager}`,
+  );
+  entry.addEventListener("click", () => {
+    closeMenu();
+    void showIn(item, scan);
+  });
+  menu = el("div", { class: "ctx-menu", role: "menu" }, entry);
+  menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - 190))}px`;
+  menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - 40))}px`;
+  document.body.append(menu);
+  entry.focus();
+}
+
+addEventListener("click", closeMenu);
+addEventListener("contextmenu", closeMenu);
+addEventListener("blur", closeMenu);
+addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeMenu();
+});
 
 function drawTabs(scan) {
   const labels = scan.drives.map((drive) => drive.label);
@@ -36,6 +101,15 @@ function drawTabs(scan) {
   );
 }
 
+/** A real folder or file tile opens the menu on a right-click. */
+function menuOn(scan) {
+  return (item, node) => {
+    striped(item, node);
+    if (revealable(item))
+      node.addEventListener("contextmenu", (event) => openMenu(event, item, scan));
+  };
+}
+
 function title(item) {
   const where = item.path === undefined ? "" : `\n${item.path}`;
   const note = cleanNote(item);
@@ -54,7 +128,28 @@ function striped(item, node) {
   );
 }
 
-/** Under the picked tile's size: what in it could be freed. */
+/** Under the picked tile's size: the way to open it, then what in it could be freed. */
+function linesFor(scan) {
+  return (item) => {
+    const out = [];
+    if (revealable(item)) {
+      const button = el("button", { type: "button", class: "btn small" }, `Open in ${manager}`);
+      button.addEventListener("click", () => void showIn(item, scan));
+      out.push(el("p", { class: "reveal" }, button));
+      if (revealed?.key === item.key)
+        out.push(
+          el(
+            "p",
+            { class: `reveal-note${revealed.failed ? " failed" : ""}`, role: "status" },
+            revealed.text,
+          ),
+        );
+    }
+    return [...out, ...lines(item)];
+  };
+}
+
+/** What in the tile could be freed. */
 function lines(item) {
   const out = [];
   for (const each of item.clean?.items ?? [])
@@ -127,7 +222,7 @@ function drawMap(scan) {
     },
     note: cleanNote,
     title,
-    decorate: striped,
+    decorate: menuOn(scan),
   });
   const anyClean = cleanWithin(at) > 0;
   $("usage").replaceChildren(
@@ -147,14 +242,16 @@ function drawMap(scan) {
           anyClean ? "could be freed — see Could be cleaned" : null,
         ),
       ),
-      detail(pickedTile ?? at, lines, childTable),
+      detail(pickedTile ?? at, linesFor(scan), childTable),
     ),
   );
 }
 
 /** Draws the tabs and the map of the drive they show. */
-export function drawUsage(scan) {
+export function drawUsage(scan, fileManager = manager) {
   shown = scan;
+  manager = fileManager ?? manager;
+  closeMenu();
   drawTabs(scan);
   if (tab === null) {
     message("The scan found no drive to map.");
@@ -166,6 +263,7 @@ export function drawUsage(scan) {
 /** In the map's place, when there is no scan to map: why, in a line. */
 export function usageMessage(text) {
   shown = null;
+  closeMenu();
   $("tabs").replaceChildren();
   message(text);
 }
