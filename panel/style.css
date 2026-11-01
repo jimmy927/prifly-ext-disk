@@ -355,7 +355,7 @@ h2 {
   font-size: 12px;
   padding-left: 16px;
 }
-/* Show in Explorer (usagemap.js): the right-click menu and the detail's button. */
+/* Investigate and Show in Explorer (usagemap.js): the right-click menu and the detail's buttons. */
 .ctx-menu {
   position: fixed;
   z-index: 10;
@@ -385,7 +385,17 @@ h2 {
   background: var(--accent);
   outline: none;
 }
+.ctx-item[aria-disabled="true"] {
+  color: var(--muted-fg);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.ctx-item[aria-disabled="true"]:hover {
+  background: none;
+}
 .mdetail .reveal {
+  display: flex;
+  gap: 6px;
   margin: 6px 0 2px;
 }
 .mdetail .reveal-note {

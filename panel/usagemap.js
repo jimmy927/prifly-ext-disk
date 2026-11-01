@@ -4,11 +4,13 @@
 // that holds others zooms into it, the breadcrumb above leads back up, and a
 // click on any other tile says what it is in the detail. Tiles that hold
 // something "Could be cleaned" lists are striped as far as it frees. A
-// right-click on a folder or file opens a menu, and its detail a button, to
-// show it in the system's file manager (`api/reveal`).
+// right-click on a tile opens a menu (menu.js), and its detail has the same as
+// buttons: Investigate (a session of its own on that folder, `prifly-launch`)
+// and show it in the system's file manager (`api/reveal`).
 
 import { cleanNote, cleanWithin, driveTree, tabsOf, trail } from "./diskmap.js";
 import { bytes, el } from "./format.js";
+import { investigateKey, menuEntries, revealPath } from "./menu.js";
 import { detail, find, layoutIn, treemap } from "./treemap.js";
 
 const $ = (id) => document.getElementById(id);
@@ -27,12 +29,17 @@ let manager = "file manager";
 /** The last "show in" outcome, for the tile it was asked for: `{ key, text, failed }`. */
 let revealed = null;
 
-/** A tile that is a real folder or file: "Other files" and "Free space" have no path. */
-function revealable(item) {
-  return item.kind === "folder" && typeof item.path === "string";
+/** Whether this page is inside prifly's window, which can start a session (`prifly-launch`). */
+function inPrifly() {
+  return window.parent !== window;
 }
 
+/** The tiles an investigation was started for while this page is open. */
+const investigated = new Set();
+
 async function showIn(item, scan) {
+  const path = revealPath(item);
+  if (path === null) return;
   picked = item.key;
   revealed = { key: item.key, text: `Opening in ${manager}…`, failed: false };
   drawUsage(shown ?? scan);
@@ -40,7 +47,7 @@ async function showIn(item, scan) {
     const response = await fetch("api/reveal", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: item.path }),
+      body: JSON.stringify({ path }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? response.statusText);
@@ -51,6 +58,28 @@ async function showIn(item, scan) {
   if (shown !== null) drawUsage(shown);
 }
 
+/**
+ * Asks prifly for a session in a window of its own that investigates the
+ * tile's folder (`prifly-launch`; the extension's `launch` writes the prompt).
+ * The menu and the detail's button then show "Started ↗" for the tile.
+ */
+function investigate(item) {
+  const key = investigateKey(item);
+  if (key === null || !inPrifly() || investigated.has(item.key)) return;
+  window.parent.postMessage({ type: "prifly-launch", launcher: "investigate", key }, "*");
+  investigated.add(item.key);
+  picked = item.key;
+  if (shown !== null) drawUsage(shown);
+}
+
+function entriesOf(item) {
+  return menuEntries(item, {
+    inPrifly: inPrifly(),
+    manager,
+    started: investigated.has(item.key),
+  });
+}
+
 let menu = null;
 
 function closeMenu() {
@@ -58,33 +87,68 @@ function closeMenu() {
   menu = null;
 }
 
-/** The small menu at the pointer: one entry, "Show in Explorer". */
+/** The entries a key press can reach: all but the disabled ones. */
+function usable(list) {
+  return [...list.querySelectorAll('[role="menuitem"]:not([aria-disabled="true"])')];
+}
+
+/** The menu at the pointer: Investigate, Show in Explorer; one that does not fit the tile stays, disabled, its title saying why. */
 function openMenu(event, item, scan) {
   event.preventDefault();
   event.stopPropagation();
   closeMenu();
-  const entry = el(
-    "button",
-    { type: "button", class: "ctx-item", role: "menuitem" },
-    `Show in ${manager}`,
-  );
-  entry.addEventListener("click", () => {
-    closeMenu();
-    void showIn(item, scan);
+  const entries = entriesOf(item).map((entry) => {
+    const node = el(
+      "button",
+      {
+        type: "button",
+        class: "ctx-item",
+        role: "menuitem",
+        title: entry.title,
+        "aria-disabled": String(!entry.enabled),
+      },
+      entry.label,
+    );
+    node.addEventListener("click", (click) => {
+      click.stopPropagation();
+      if (!entry.enabled) return;
+      closeMenu();
+      if (entry.id === "investigate") investigate(item);
+      else void showIn(item, scan);
+    });
+    return node;
   });
-  menu = el("div", { class: "ctx-menu", role: "menu" }, entry);
-  menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - 190))}px`;
-  menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - 40))}px`;
+  menu = el("div", { class: "ctx-menu", role: "menu" }, ...entries);
+  menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - 250))}px`;
+  menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - 80))}px`;
   document.body.append(menu);
-  entry.focus();
+  usable(menu)[0]?.focus();
+}
+
+/** Arrow keys move over the entries that can be used, Enter picks the focused one, Escape closes. */
+function menuKey(event) {
+  if (menu === null) return;
+  if (event.key === "Escape") {
+    closeMenu();
+    return;
+  }
+  const choices = usable(menu);
+  const at = choices.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (choices.length === 0) return;
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    choices[(at + step + choices.length) % choices.length]?.focus();
+  } else if (event.key === "Enter" && at >= 0) {
+    event.preventDefault();
+    choices[at]?.click();
+  }
 }
 
 addEventListener("click", closeMenu);
 addEventListener("contextmenu", closeMenu);
 addEventListener("blur", closeMenu);
-addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeMenu();
-});
+addEventListener("keydown", menuKey);
 
 function drawTabs(scan) {
   const labels = tabsOf(scan);
@@ -107,12 +171,11 @@ function drawTabs(scan) {
   );
 }
 
-/** A real folder or file tile opens the menu on a right-click. */
+/** Every tile opens the menu on a right-click: an entry that does not fit it is disabled, not hidden. */
 function menuOn(scan) {
   return (item, node) => {
     striped(item, node);
-    if (revealable(item))
-      node.addEventListener("contextmenu", (event) => openMenu(event, item, scan));
+    node.addEventListener("contextmenu", (event) => openMenu(event, item, scan));
   };
 }
 
@@ -138,10 +201,26 @@ function striped(item, node) {
 function linesFor(scan) {
   return (item) => {
     const out = [];
-    if (revealable(item)) {
-      const button = el("button", { type: "button", class: "btn small" }, `Open in ${manager}`);
-      button.addEventListener("click", () => void showIn(item, scan));
-      out.push(el("p", { class: "reveal" }, button));
+    const entries = entriesOf(item);
+    if (!["free", "unused", "drive"].includes(item.kind)) {
+      const buttons = entries.map((entry) => {
+        const button = el(
+          "button",
+          { type: "button", class: "btn small", title: entry.title },
+          entry.id === "reveal"
+            ? `Open in ${manager}`
+            : entry.label === "Started ↗"
+              ? entry.label
+              : "Investigate",
+        );
+        button.disabled = !entry.enabled;
+        button.addEventListener("click", () => {
+          if (entry.id === "reveal") void showIn(item, scan);
+          else investigate(item);
+        });
+        return button;
+      });
+      out.push(el("p", { class: "reveal" }, ...buttons));
       if (revealed?.key === item.key)
         out.push(
           el(

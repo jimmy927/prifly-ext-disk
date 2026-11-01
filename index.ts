@@ -16,11 +16,14 @@
  * The window's Clean up buttons start a session each, in a window of its own
  * (prifly's `prifly-launch`), through `launch` with the candidate's id or a
  * group as the key; when such a session ends the drives are scanned again.
+ * The map's right-click "Investigate" starts one too, through `launch` with
+ * the launcher "investigate" and a folder of the scan as the key.
  */
 
 import { homedir } from "node:os";
 import type { ExtensionApi, Launch, PanelRequest } from "./prifly-api";
 import { readCache } from "./scan/cache";
+import { investigatePrompt } from "./scan/investigate";
 import { type Running, ScanStopped, scanOffThread } from "./scan/off-thread";
 import type { Part } from "./scan/progress";
 import { cleanupPrompt } from "./scan/prompt";
@@ -153,8 +156,17 @@ export async function panel(_panelId: string, request: PanelRequest): Promise<un
   }
 }
 
-/** The session a window button starts: a candidate's id, or `group:<safety>` for a group. */
-export function launch(_launchId: string, key: string): Launch {
+/** The launcher of the map's "Investigate" (`prifly-launch`); its key is `folder:<path>` or `rest:<path>`. */
+const INVESTIGATE = "investigate";
+
+/** The session a window button starts: a candidate's id, or `group:<safety>` for a group; or an investigation. */
+export function launch(launchId: string, key: string): Launch {
+  if (launchId === INVESTIGATE)
+    return {
+      prompt: investigatePrompt(state?.last ?? null, key),
+      cwd: homedir(),
+      name: "disk-investigate",
+    };
   return {
     prompt: cleanupPrompt(state?.last ?? null, key),
     cwd: homedir(),
@@ -163,6 +175,7 @@ export function launch(_launchId: string, key: string): Launch {
 }
 
 /** The session a cleanup became: watched, so the drives are scanned again when it ends. */
-export function launched(_launchId: string, _key: string, sessionId: string): void {
-  state?.cleanups.add(sessionId);
+export function launched(launchId: string, _key: string, sessionId: string): void {
+  // An investigation changes nothing by itself: no rescan when it ends.
+  if (launchId !== INVESTIGATE) state?.cleanups.add(sessionId);
 }

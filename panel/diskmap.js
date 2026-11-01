@@ -52,6 +52,11 @@ export function nest(items) {
   return top;
 }
 
+/** The top of a drive, as the backend (`scan/reveal.ts` `driveRoot`) names it: `C:\` for a Windows drive, else its mount. */
+export function driveRoot(drive) {
+  return /^[A-Za-z]:$/.test(drive.label) ? `${drive.label}\\` : drive.mount;
+}
+
 /** A usage item's name on its tile: what the scan calls it, or its folder's own name. */
 export function nameOf(item) {
   if (item.what !== "folder") return item.what;
@@ -70,6 +75,7 @@ function folderTile(n, colour) {
       key: `${n.key}#rest`,
       kind: "rest",
       name: "other files",
+      parent: n.item.path,
       value: rest,
       colour: `${colour} rest`,
       why: `In ${n.item.path} but in none of the folders the scan lists on its own: smaller folders, and files.`,
@@ -247,6 +253,7 @@ function graftLinux(root, scan, label) {
       key: `${tile.key}#linux-other`,
       kind: "rest",
       name: "other Linux files",
+      parent: driveRoot(home.linux),
       value: other,
       colour: "c5 rest",
       why: "Used inside WSL but in none of the folders the scan lists on its own: smaller folders, and files.",
@@ -286,6 +293,7 @@ export function driveTree(scan, label) {
       key: "#other",
       kind: "other",
       name: "Other files",
+      parent: driveRoot(drive),
       value: other,
       colour: "k-other",
       why: `Used on ${label} but in none of the folders the scan lists on its own: folders under 1 GB, and files.`,

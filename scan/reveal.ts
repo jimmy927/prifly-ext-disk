@@ -12,7 +12,7 @@
 import { statSync } from "node:fs";
 import { posix } from "node:path";
 import { ON_WINDOWS, onWsl, WINDOWS_CWD, windowsProgram } from "./run";
-import type { Scan } from "./types";
+import type { Drive, Scan } from "./types";
 import { readDistro } from "./wsl";
 
 /** Where this runs, as far as opening a folder cares. */
@@ -39,15 +39,25 @@ export function fileManagerName(host: Host): string {
   return host.platform === "darwin" ? "Finder" : "Files";
 }
 
-/** `path` if the scan listed it as something taking space, else why not. */
+/**
+ * The top of a drive as the window's remainder tiles name it: `C:\` for a
+ * Windows drive, the mount (`/` for WSL) for any other.
+ */
+export function driveRoot(drive: Drive): string {
+  return /^[A-Za-z]:$/.test(drive.label) ? `${drive.label}\\` : drive.mount;
+}
+
+/** `path` if the scan listed it as something taking space, or as the top of a drive, else why not. */
 export function scannedPath(
   scan: Scan | null,
   path: unknown,
 ): { path: string } | { error: string } {
   if (typeof path !== "string" || path === "") return { error: "No path was given." };
   if (scan === null) return { error: "There is no scan yet, so there is nothing to open." };
-  if (!scan.usage.some((item) => item.path === path))
-    return { error: "That path is not in the last scan, so it is not opened." };
+  const listed =
+    scan.usage.some((item) => item.path === path) ||
+    scan.drives.some((drive) => driveRoot(drive) === path);
+  if (!listed) return { error: "That path is not in the last scan, so it is not opened." };
   return { path };
 }
 

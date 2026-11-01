@@ -41,6 +41,19 @@ describe("which path may be opened", () => {
     }
   });
 
+  test("the top of a drive the scan listed, which a remainder tile is the rest of", () => {
+    const last: Scan = {
+      ...scan([IMAGE]),
+      drives: [
+        { mount: "/mnt/c", label: "C:", sizeBytes: 3, usedBytes: 2, freeBytes: 1 },
+        { mount: "/", label: "WSL", sizeBytes: 3, usedBytes: 2, freeBytes: 1 },
+      ],
+    };
+    expect(scannedPath(last, "C:\\")).toEqual({ path: "C:\\" });
+    expect(scannedPath(last, "/")).toEqual({ path: "/" });
+    expect(scannedPath(last, "D:\\")).toHaveProperty("error");
+  });
+
   test("no path, a non-string, or no scan at all", () => {
     expect(scannedPath(scan([IMAGE]), "")).toHaveProperty("error");
     expect(scannedPath(scan([IMAGE]), 42)).toHaveProperty("error");
