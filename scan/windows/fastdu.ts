@@ -216,6 +216,7 @@ async function streamOnce(
     ...(cwd === undefined ? {} : { cwd }),
     stdout: "pipe",
     stderr: "pipe",
+    windowsHide: true,
   });
   let errors = "";
   const reading = (async () => {
