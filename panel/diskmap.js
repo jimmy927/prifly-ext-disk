@@ -131,6 +131,28 @@ function* tiles(tile) {
 }
 
 /**
+ * The deepest folder tile holding `target` (a normalised path), counting the
+ * folders collapsed into it (`lead`); `exact` where the path is that folder
+ * itself, not something inside it, so it spans the whole tile. No `best`
+ * where no folder holds it.
+ */
+function holding(root, target) {
+  let best;
+  let bestLength = -1;
+  for (const tile of tiles(root)) {
+    if (tile.kind !== "folder") continue;
+    for (const key of [tile.key, ...(tile.lead ?? [])]) {
+      const inside = target === key || target.startsWith(`${key}/`);
+      if (inside && key.length > bestLength) {
+        best = tile;
+        bestLength = key.length;
+      }
+    }
+  }
+  return { best, exact: bestLength === target.length };
+}
+
+/**
  * The tile a candidate's bytes come out of: the deepest folder holding its
  * path anywhere in the tree (a database's "dir (name)" by its dir), and for
  * Docker's own cleanups, which name a command rather than a path, the Docker
@@ -143,27 +165,7 @@ export function homeOf(root, candidate) {
     return null;
   }
   const target = norm(candidate.path.replace(/ \([^)]*\)$/, ""));
-  // How deep a folder tile holds the path: the length of its longest key
-  // (or collapsed-in parent's) that does; -1 where none.
-  const depth = (tile) =>
-    tile.kind !== "folder"
-      ? -1
-      : Math.max(
-          ...[tile.key, ...(tile.lead ?? [])].map((key) =>
-            target === key || target.startsWith(`${key}/`) ? key.length : -1,
-          ),
-        );
-  let best;
-  let bestDepth = -1;
-  for (const tile of tiles(root)) {
-    const d = depth(tile);
-    if (d > bestDepth) {
-      best = tile;
-      bestDepth = d;
-    }
-  }
-  // The path is the folder itself, not something inside it: it spans all of the tile.
-  const exact = best !== undefined && bestDepth === target.length;
+  const { best, exact } = holding(root, target);
   if (best === undefined) return null;
   // A trim frees the image's unused blocks: the tile that shows them.
   if (candidate.kind === "disk-image")

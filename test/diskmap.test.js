@@ -362,12 +362,8 @@ describe("chains collapse", () => {
 
   test("a candidate on a group's own folder stays on the group, not its other-files tile", () => {
     const scan = fixture();
-    scan.candidates.push({
-      ...scan.candidates[2],
-      id: "j",
-      kind: "worktree",
-      path: "C:\\Users\\jimmy",
-    });
+    const path = "C:\\Users\\jimmy";
+    scan.candidates.push({ ...scan.candidates[2], id: "j", kind: "worktree", path });
     expect(homeOf(driveTree(scan, "C:"), scan.candidates.at(-1))?.key).toBe("c:/users/jimmy");
   });
 });
