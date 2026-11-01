@@ -2,7 +2,11 @@
 
 import { existsSync } from "node:fs";
 
-/** Running on Windows itself, not under WSL: Windows programs start directly, WSL through `wsl.exe`. */
+/**
+ * Running on Windows itself, not under WSL: Windows programs start directly, WSL through `wsl.exe`.
+ * prifly has no console there, so every console program it starts is spawned
+ * with `windowsHide`, or each one opens a Terminal window of its own.
+ */
 export const ON_WINDOWS = process.platform === "win32";
 
 const SYSTEM_ROOT = process.env["SystemRoot"] ?? "C:\\Windows";
@@ -80,6 +84,7 @@ async function runOnce(argv: string[], timeoutMs: number, cwd?: string): Promise
   const proc = Bun.spawn(argv, {
     stdout: "pipe",
     stderr: "pipe",
+    windowsHide: true,
     ...(cwd === undefined ? {} : { cwd }),
   });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
