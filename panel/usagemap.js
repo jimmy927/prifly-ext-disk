@@ -37,6 +37,9 @@ function inPrifly() {
 /** The tiles an investigation was started for while this page is open. */
 const investigated = new Set();
 
+/** How long "Opening in …" may stand before it says it did not open. */
+const REVEAL_MS = 15_000;
+
 async function showIn(item, scan) {
   const path = revealPath(item);
   if (path === null) return;
@@ -48,12 +51,18 @@ async function showIn(item, scan) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path }),
+      // The backend gives up on a slow WSL within seconds; this is the net under it.
+      signal: AbortSignal.timeout(REVEAL_MS),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? response.statusText);
     revealed = { key: item.key, text: `Shown in ${manager}.`, failed: false };
   } catch (error) {
-    revealed = { key: item.key, text: String(error.message ?? error), failed: true };
+    const text =
+      error?.name === "TimeoutError"
+        ? `${manager} did not open within ${REVEAL_MS / 1000} s.`
+        : String(error?.message ?? error);
+    revealed = { key: item.key, text, failed: true };
   }
   if (shown !== null) drawUsage(shown);
 }
