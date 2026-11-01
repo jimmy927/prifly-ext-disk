@@ -75,6 +75,19 @@ function folderTile(n, colour) {
       why: `In ${n.item.path} but in none of the folders the scan lists on its own: smaller folders, and files.`,
     });
   }
+  // A folder whose only content is one listed folder is that folder's tile,
+  // named "Users › jimmy": two stacked headers say no more. It answers to
+  // both folders' paths (`lead`) and keeps the deeper folder's key and path.
+  const [only] = children;
+  if (children.length === 1 && only.kind === "folder") {
+    const chain = [nameOf(n.item), ...(only.chain ?? [only.name])];
+    return {
+      ...only,
+      name: chain.join(" › "),
+      chain,
+      lead: [n.key, ...(only.lead ?? [])],
+    };
+  }
   const tile = {
     key: n.key,
     kind: "folder",
@@ -130,18 +143,31 @@ export function homeOf(root, candidate) {
     return null;
   }
   const target = norm(candidate.path.replace(/ \([^)]*\)$/, ""));
-  const holding = [...tiles(root)].filter(
-    (tile) => tile.kind === "folder" && (target === tile.key || target.startsWith(`${tile.key}/`)),
-  );
-  const best = holding.reduce(
-    (deepest, tile) =>
-      deepest === undefined || tile.key.length > deepest.key.length ? tile : deepest,
-    undefined,
-  );
+  // How deep a folder tile holds the path: the length of its longest key
+  // (or collapsed-in parent's) that does; -1 where none.
+  const depth = (tile) =>
+    tile.kind !== "folder"
+      ? -1
+      : Math.max(
+          ...[tile.key, ...(tile.lead ?? [])].map((key) =>
+            target === key || target.startsWith(`${key}/`) ? key.length : -1,
+          ),
+        );
+  let best;
+  let bestDepth = -1;
+  for (const tile of tiles(root)) {
+    const d = depth(tile);
+    if (d > bestDepth) {
+      best = tile;
+      bestDepth = d;
+    }
+  }
+  if (best === undefined) return null;
   // A trim frees the image's unused blocks: the tile that shows them.
-  if (best !== undefined && candidate.kind === "disk-image")
+  if (candidate.kind === "disk-image")
     return best.children?.find((c) => c.kind === "unused") ?? best;
-  return best ?? null;
+  // A group's own bytes are its "other files": that is where the path's bytes are.
+  return best.children?.find((c) => c.kind === "rest") ?? best;
 }
 
 /** Each candidate on its tile, as `tile.clean`: the items, and what they free, never more than the tile. */
@@ -285,12 +311,22 @@ export function driveTree(scan, label) {
   return root;
 }
 
-/** The tiles from `root` down to the one of `key`, both ends included: the breadcrumb. Just the root where there is none. */
-export function trail(root, key) {
+function tilesTo(root, key) {
   if (root.key === key) return [root];
   for (const child of root.children ?? []) {
-    const below = trail(child, key);
+    const below = tilesTo(child, key);
     if (below.at(-1)?.key === key) return [root, ...below];
   }
   return [root];
+}
+
+/**
+ * The steps from `root` down to the tile of `key`, both ends included: the
+ * breadcrumb. A collapsed chain ("Users › jimmy") is a step per folder, each
+ * leading to that one tile. Just the root where there is none.
+ */
+export function trail(root, key) {
+  return tilesTo(root, key).flatMap((tile) =>
+    tile.chain === undefined ? [tile] : tile.chain.map((name) => ({ ...tile, name })),
+  );
 }

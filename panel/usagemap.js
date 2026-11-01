@@ -122,9 +122,9 @@ function title(item) {
   return `${item.name}: ${bytes(item.value)}${where}${note === null ? "" : `\n${note}`}`;
 }
 
-/** The part of a tile that could be freed, striped from its foot up. */
+/** The part of a tile that could be freed, striped from its foot up. A group has none: its children cover its foot. */
 function striped(item, node) {
-  if (!item.clean) return;
+  if (!item.clean || item.children) return;
   node.classList.add("has-clean");
   node.append(
     el("div", {
@@ -246,7 +246,8 @@ function drawMap(scan) {
       } else picked = key;
       drawUsage(scan);
     },
-    note: cleanNote,
+    // A group's header is one line tall: its note is in its hover title and the detail.
+    note: (item) => (item.children ? null : cleanNote(item)),
     title,
     decorate: menuOn(scan),
   });

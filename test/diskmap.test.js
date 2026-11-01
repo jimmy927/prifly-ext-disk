@@ -1,5 +1,4 @@
-// The "What takes the space" map's model (panel/diskmap.js) and the squarified
-// layout it is drawn with (panel/treemap.js, copied from prifly-ext-perf).
+// The "What takes the space" map's model (panel/diskmap.js); its layout is in squarify.test.js.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -12,7 +11,7 @@ import {
   tabsOf,
   trail,
 } from "../panel/diskmap.js";
-import { find, squarify } from "../panel/treemap.js";
+import { find } from "../panel/treemap.js";
 
 const GB = 1e9;
 const IMAGE = "C:\\Users\\jimmy\\AppData\\Local\\Packages\\Ubuntu20.04\\LocalState\\ext4.vhdx";
@@ -157,7 +156,13 @@ describe("driveTree", () => {
   const c = driveTree(fixture(), "C:");
 
   test("the top level is the outermost folders, biggest first, then other files and free space", () => {
-    expect(keys(c)).toEqual(["c:/users", "c:/program files", "c:/windows", "#other", "#free"]);
+    expect(keys(c)).toEqual([
+      "c:/users/jimmy",
+      "c:/program files",
+      "c:/windows",
+      "#other",
+      "#free",
+    ]);
     expect(find(c.children, "#free").value).toBe(50 * GB);
     // 950 used, 832 + 62 + 30 of it in the folders.
     expect(find(c.children, "#other").value).toBe(26 * GB);
@@ -165,8 +170,8 @@ describe("driveTree", () => {
   });
 
   test("children are inside their parent, never beside it", () => {
-    const users = find(c.children, "c:/users");
-    expect(keys(users)).toEqual(["c:/users/jimmy"]);
+    // Users holds only jimmy: one tile, "Users › jimmy" (see "chains collapse").
+    expect(find(c.children, "c:/users")).toBeNull();
     const jimmy = find(c.children, "c:/users/jimmy");
     expect(keys(jimmy)).toEqual([
       "c:/users/jimmy/appdata",
@@ -186,8 +191,8 @@ describe("driveTree", () => {
     }
     const paths = all(c).flatMap((t) => (t.path === undefined ? [] : [norm(t.path)]));
     expect(new Set(paths).size).toBe(paths.length);
-    // The eight Windows paths, and the three Linux folders inside the WSL image.
-    expect(paths.length).toBe(11);
+    // The eight Windows paths less Users, drawn in jimmy's tile, and the three Linux folders inside the WSL image.
+    expect(paths.length).toBe(10);
   });
 
   test("the remainder tile is what the children leave of their parent", () => {
@@ -204,7 +209,7 @@ describe("driveTree", () => {
   });
 
   test("a top-level folder's colour is kept by everything inside it", () => {
-    const users = find(c.children, "c:/users");
+    const users = find(c.children, "c:/users/jimmy");
     // Except WSL's own folders inside the disk image, which have a colour of their own.
     const image = find(users.children, norm(IMAGE));
     const inside = all(users)
@@ -229,7 +234,7 @@ describe("cleanable marks", () => {
     expect(cleanNote(unused)).toBe("87 GB could be freed by trimming");
     expect(find(c.children, norm(IMAGE)).clean).toBeUndefined();
     expect(cleanNote(find(c.children, "c:/users/jimmy"))).toBeNull();
-    expect(cleanWithin(find(c.children, "c:/users"))).toBe(127 * GB);
+    expect(cleanWithin(find(c.children, "c:/users/jimmy"))).toBe(127 * GB);
   });
 
   test("Docker's cleanups, which name a command, sit on the Docker data disk", () => {
@@ -278,6 +283,84 @@ describe("cleanable marks", () => {
   });
 });
 
+describe("a candidate on a group", () => {
+  const worktree = (path) => ({
+    id: "wt",
+    kind: "worktree",
+    title: "Old worktree",
+    path,
+    bytes: 7 * GB,
+    drive: "C:",
+    safety: "safe",
+    why: "merged",
+    blockers: [],
+  });
+
+  test("moves to the group's other-files tile, where its bytes are; the group has no mark", () => {
+    const scan = fixture();
+    scan.candidates.push(worktree("C:\\Users\\jimmy\\worktrees\\old"));
+    const c = driveTree(scan, "C:");
+    const rest = find(c.children, "c:/users/jimmy#rest");
+    expect(rest.clean.items.map((i) => i.id)).toEqual(["wt"]);
+    expect(cleanNote(rest)).toBe("7.0 GB could be freed by removing worktrees");
+    expect(find(c.children, "c:/users/jimmy").clean).toBeUndefined();
+  });
+
+  test("a collapsed chain ending in a plain folder keeps it on that folder", () => {
+    const scan = fixture();
+    scan.usage.push({ drive: "C:", path: "C:\\Windows\\System32", bytes: 30 * GB, what: "folder" });
+    scan.candidates.push(worktree("C:\\Windows\\temp\\x"));
+    const c = driveTree(scan, "C:");
+    // Windows holds only System32: collapsed, a leaf; it has no children to draw a foot under.
+    const tile = find(c.children, "c:/windows/system32");
+    expect(tile.name).toBe("Windows › System32");
+    expect(tile.clean.items.map((i) => i.id)).toEqual(["wt"]);
+    expect(tile.children).toBeUndefined();
+  });
+
+  test("a group with children and no rest keeps it", () => {
+    const scan = fixture();
+    scan.usage.push(
+      { drive: "C:", path: "C:\\Windows\\A", bytes: 15 * GB, what: "folder" },
+      { drive: "C:", path: "C:\\Windows\\B", bytes: 15 * GB, what: "folder" },
+    );
+    scan.candidates.push(worktree("C:\\Windows\\C\\x"));
+    const win = find(driveTree(scan, "C:").children, "c:/windows");
+    expect(win.children.map((t) => t.kind)).toEqual(["folder", "folder"]);
+    expect(win.clean.items.map((i) => i.id)).toEqual(["wt"]);
+  });
+});
+
+describe("chains collapse", () => {
+  const c = driveTree(fixture(), "C:");
+
+  test("Users with only jimmy in it is one tile, with jimmy's key, path and children", () => {
+    const tile = find(c.children, "c:/users/jimmy");
+    expect(tile.name).toBe("Users › jimmy");
+    expect(tile.path).toBe("C:\\Users\\jimmy");
+    expect(tile.value).toBe(832 * GB);
+    expect(keys(tile)).toEqual([
+      "c:/users/jimmy/appdata",
+      "c:/users/jimmy/videos",
+      "c:/users/jimmy#rest",
+    ]);
+  });
+
+  test("a folder with a real remainder is not collapsed", () => {
+    const scan = fixture();
+    scan.usage.find((u) => u.path === "C:\\Users").bytes = 840 * GB;
+    const users = find(driveTree(scan, "C:").children, "c:/users");
+    expect(users.name).toBe("Users");
+    expect(keys(users)).toEqual(["c:/users/jimmy", "c:/users#rest"]);
+  });
+
+  test("a candidate on the parent folder's own path lands in the collapsed tile", () => {
+    const scan = fixture();
+    scan.candidates.push({ ...scan.candidates[2], id: "u", kind: "worktree", path: "C:\\Users" });
+    expect(homeOf(driveTree(scan, "C:"), scan.candidates.at(-1))?.key).toBe("c:/users/jimmy#rest");
+  });
+});
+
 describe("WSL inside its disk image", () => {
   const scan = fixture();
   const c = driveTree(scan, "C:");
@@ -314,7 +397,7 @@ describe("WSL inside its disk image", () => {
     expect(unused.colour).toBe("k-free");
     for (const tile of all(find(image.children, "/home/jimmy")))
       expect(tile.colour.split(" ")[0]).toBe("c5");
-    expect(find(c.children, "c:/users").colour).not.toContain("c5");
+    expect(find(c.children, "c:/users/jimmy").colour).not.toContain("c5");
   });
 
   test("the trim candidate is on the unused tile only", () => {
@@ -397,54 +480,14 @@ describe("trail", () => {
     ]);
   });
 
+  test("a collapsed tile is a step per folder, each leading to that tile", () => {
+    const steps = trail(c, "c:/users/jimmy");
+    expect(steps.map((t) => t.name)).toEqual(["C:", "Users", "jimmy"]);
+    expect(steps.slice(1).map((t) => t.key)).toEqual(["c:/users/jimmy", "c:/users/jimmy"]);
+  });
+
   test("the drive alone at the top, or where the key is gone", () => {
     expect(trail(c, "#root").map((t) => t.key)).toEqual(["#root"]);
     expect(trail(c, "c:/gone").map((t) => t.key)).toEqual(["#root"]);
-  });
-});
-
-describe("squarify", () => {
-  const items = [500, 300, 120, 60, 15, 5].map((value, i) => ({ key: `k${i}`, value }));
-  const rect = { x: 10, y: 20, w: 600, h: 360 };
-  const out = squarify(items, rect);
-
-  test("every item gets a tile, as big as its share of the rect", () => {
-    expect(out.length).toBe(items.length);
-    const total = 1000;
-    for (const t of out) expect(t.w * t.h).toBeCloseTo((rect.w * rect.h * t.item.value) / total, 6);
-  });
-
-  test("the tiles fill the rect and stay inside it", () => {
-    const area = out.reduce((s, t) => s + t.w * t.h, 0);
-    expect(area).toBeCloseTo(rect.w * rect.h, 6);
-    for (const t of out) {
-      expect(t.x).toBeGreaterThanOrEqual(rect.x - 1e-9);
-      expect(t.y).toBeGreaterThanOrEqual(rect.y - 1e-9);
-      expect(t.x + t.w).toBeLessThanOrEqual(rect.x + rect.w + 1e-9);
-      expect(t.y + t.h).toBeLessThanOrEqual(rect.y + rect.h + 1e-9);
-    }
-  });
-
-  test("no two tiles overlap", () => {
-    for (const [i, a] of out.entries()) {
-      for (const b of out.slice(i + 1)) {
-        const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-        const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
-        expect(w <= 1e-9 || h <= 1e-9).toBe(true);
-      }
-    }
-  });
-
-  test("a drive's top level lays out the same way, free tile included", () => {
-    const c = driveTree(fixture(), "C:");
-    const laid = squarify(c.children, { x: 0, y: 0, w: 500, h: 300 });
-    expect(laid.map((t) => t.item.key).sort()).toEqual([...keys(c)].sort());
-    expect(laid.reduce((s, t) => s + t.w * t.h, 0)).toBeCloseTo(500 * 300, 6);
-  });
-
-  test("nothing to lay out, or no room, gives no tiles", () => {
-    expect(squarify([], rect)).toEqual([]);
-    expect(squarify([{ value: 0 }], rect)).toEqual([]);
-    expect(squarify(items, { x: 0, y: 0, w: 0, h: 100 })).toEqual([]);
   });
 });
