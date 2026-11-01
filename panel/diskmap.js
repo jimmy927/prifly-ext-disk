@@ -162,11 +162,14 @@ export function homeOf(root, candidate) {
       bestDepth = d;
     }
   }
+  // The path is the folder itself, not something inside it: it spans all of the tile.
+  const exact = best !== undefined && bestDepth === target.length;
   if (best === undefined) return null;
   // A trim frees the image's unused blocks: the tile that shows them.
   if (candidate.kind === "disk-image")
     return best.children?.find((c) => c.kind === "unused") ?? best;
-  // A group's own bytes are its "other files": that is where the path's bytes are.
+  // A path inside a group but in none of its listed folders: its bytes are in the group's "other files".
+  if (exact) return best;
   return best.children?.find((c) => c.kind === "rest") ?? best;
 }
 
