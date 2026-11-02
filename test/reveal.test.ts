@@ -285,7 +285,7 @@ describe("the WSL distro", () => {
 });
 
 describe("reveal on Windows, with nothing started", () => {
-  type Started = { argv: string[]; verbatim: boolean };
+  type Started = { argv: string[]; verbatim: boolean; windowsHide: boolean };
   function deps(kinds: Record<string, "file" | "folder" | null | "hang">, lookupCalls: string[]) {
     const started: Started[] = [];
     const d: RevealDeps = {
@@ -300,7 +300,7 @@ describe("reveal on Windows, with nothing started", () => {
         return Promise.resolve(kind ?? null);
       },
       spawn: (argv, options) => {
-        started.push({ argv, verbatim: options.verbatim });
+        started.push({ argv, verbatim: options.verbatim, windowsHide: options.windowsHide });
         return { exited: new Promise(() => undefined), stderr: null };
       },
     };
@@ -325,6 +325,8 @@ describe("reveal on Windows, with nothing started", () => {
     expect(Date.now() - begun).toBeLessThan(500);
     expect(lookups).toEqual([]);
     expect(started.every((each) => each.verbatim)).toBe(true);
+    // prifly hides an extension's spawn that names no windowsHide: Explorer must say false.
+    expect(started.map((each) => each.windowsHide)).toEqual([false, false, false, false]);
     expect(started.map((each) => windowsCommandLine(each.argv.slice(1)))).toEqual([
       '"C:\\Program Files"',
       `/select,${IMAGE}`,

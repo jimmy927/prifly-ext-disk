@@ -239,6 +239,15 @@ const STAT_MS = 2000;
 /** How long a file manager launcher may run before it counts as opened: xdg-open can stay on. */
 const LAUNCH_MS = 3000;
 
+/** What `reveal` asks of a start; `windowsHide` is passed to `Bun.spawn` as it is. */
+export type SpawnOptions = {
+  verbatim: boolean;
+  cwd: string | undefined;
+  detached: boolean;
+  /** Always `false`: a file manager is a window the reader is to see. */
+  windowsHide: boolean;
+};
+
 type Spawned = { exited: Promise<number>; stderr: unknown };
 
 /** What `reveal` looks at and starts; a test replaces them. */
@@ -247,10 +256,7 @@ export type RevealDeps = {
   lookup: DistroLookup;
   /** Whether `path` is a file, a folder, or gone (null). */
   kind: (path: string) => Promise<"file" | "folder" | null>;
-  spawn: (
-    argv: string[],
-    options: { verbatim: boolean; cwd: string | undefined; detached: boolean },
-  ) => Spawned;
+  spawn: (argv: string[], options: SpawnOptions) => Spawned;
 };
 
 async function statKind(path: string): Promise<"file" | "folder" | null> {
@@ -261,15 +267,15 @@ async function statKind(path: string): Promise<"file" | "folder" | null> {
   }
 }
 
-function spawnProgram(
-  argv: string[],
-  options: { verbatim: boolean; cwd: string | undefined; detached: boolean },
-): Spawned {
-  // No shell: the path is an argument, never a command line. Never
-  // `windowsHide` here: Explorer would honour it and open a hidden window.
+function spawnProgram(argv: string[], options: SpawnOptions): Spawned {
+  // No shell: the path is an argument, never a command line. `windowsHide`
+  // is named, as `false`: on Windows prifly's host gives every spawn of an
+  // extension that names none `windowsHide: true`, and Explorer, a GUI
+  // program, would honour it and open a window that is never visible.
   return Bun.spawn(argv, {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     windowsVerbatimArguments: options.verbatim,
+    windowsHide: options.windowsHide,
     stdin: "ignore",
     stdout: "ignore",
     // A launcher's error is read only if it exits non-zero within LAUNCH_MS.
@@ -330,6 +336,7 @@ export async function reveal(
       verbatim: command.verbatim,
       cwd: host.wsl ? WINDOWS_CWD : undefined,
       detached: command.ignoreExit,
+      windowsHide: false,
     });
   } catch (error) {
     throw new Error(
