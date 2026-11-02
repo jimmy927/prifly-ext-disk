@@ -377,9 +377,7 @@ export async function reveal(
       windowsHide: false,
     });
   } catch (error) {
-    throw new Error(
-      `${program} could not be started: ${why(error)}`,
-    );
+    throw new Error(`${program} could not be started: ${why(error)}`);
   }
   raiseOpened(raising, allowed.path);
   // Explorer's exit code says nothing, so there is nothing to wait for: it
