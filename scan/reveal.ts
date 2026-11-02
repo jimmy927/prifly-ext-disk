@@ -14,10 +14,16 @@
  * disk image's label) before `wsl.exe` is asked, briefly. WSL's interop
  * hangs at times (`UtilAcceptVsock: accept4 failed 110`), and a click must
  * not sit on "Opening…" for it.
+ *
+ * On Windows the window Explorer opens is then brought to the front
+ * (`./raise`): started from prifly's background host it would open behind
+ * every other window. The reveal does not wait for that, and a raise that
+ * fails is written to the log, never thrown: the window is open either way.
  */
 
 import { stat } from "node:fs/promises";
 import { posix } from "node:path";
+import { type Raising, startRaise } from "./raise";
 import { onWsl, WINDOWS_CWD, windowsProgram } from "./run";
 import type { Drive, Scan } from "./types";
 import { readDistro } from "./wsl";
@@ -257,6 +263,8 @@ export type RevealDeps = {
   /** Whether `path` is a file, a folder, or gone (null). */
   kind: (path: string) => Promise<"file" | "folder" | null>;
   spawn: (argv: string[], options: SpawnOptions) => Spawned;
+  /** On Windows, just before Explorer starts: notes its windows, to raise the new one. */
+  raise: () => Raising;
 };
 
 async function statKind(path: string): Promise<"file" | "folder" | null> {
@@ -293,6 +301,7 @@ function defaultDeps(): RevealDeps {
     lookup: quickDistro,
     kind: statKind,
     spawn: spawnProgram,
+    raise: () => startRaise(),
   };
 }
 
@@ -307,6 +316,34 @@ async function kindWithin(deps: RevealDeps, local: string): Promise<"file" | "fo
     `${local} did not answer within ${STAT_MS / 1000} s` +
       (local.startsWith("\\\\wsl") ? ": WSL's file share is stopped or slow." : "."),
   );
+}
+
+function why(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** On Windows `deps.raise()`, else null; null, logged, where it cannot be had. */
+function beginRaise(deps: RevealDeps, host: Host): Raising | null {
+  if (host.platform !== "win32") return null;
+  try {
+    return deps.raise();
+  } catch (error) {
+    console.warn(`Explorer's window is not brought to the front: ${why(error)}`);
+    return null;
+  }
+}
+
+/** Raises Explorer's new window in the background; only a failure is logged. */
+function raiseOpened(raising: Raising | null, path: string): void {
+  if (raising === null) return;
+  const said = (outcome: string) => {
+    if (!outcome.startsWith("raised")) console.warn(`Explorer's window for ${path}: ${outcome}`);
+  };
+  try {
+    raising.opened().then(said, (error: unknown) => said(`not raised: ${why(error)}`));
+  } catch (error) {
+    said(`not raised: ${why(error)}`);
+  }
 }
 
 /**
@@ -330,6 +367,7 @@ export async function reveal(
   const command = revealCommand(host, allowed.path, kind === "file");
   if ("error" in command) throw new Error(command.error);
   const program = command.program === "explorer" ? windowsProgram("explorer.exe") : command.program;
+  const raising = beginRaise(deps, host);
   let child: Spawned;
   try {
     child = deps.spawn([program, ...command.args], {
@@ -340,9 +378,10 @@ export async function reveal(
     });
   } catch (error) {
     throw new Error(
-      `${program} could not be started: ${error instanceof Error ? error.message : error}`,
+      `${program} could not be started: ${why(error)}`,
     );
   }
+  raiseOpened(raising, allowed.path);
   // Explorer's exit code says nothing, so there is nothing to wait for: it
   // started, and the window opens. It hands the path to the running Explorer and exits.
   if (command.ignoreExit) {

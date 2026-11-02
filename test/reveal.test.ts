@@ -288,6 +288,8 @@ describe("reveal on Windows, with nothing started", () => {
   type Started = { argv: string[]; verbatim: boolean; windowsHide: boolean };
   function deps(kinds: Record<string, "file" | "folder" | null | "hang">, lookupCalls: string[]) {
     const started: Started[] = [];
+    /** What happened, in order: "noted" (windows before Explorer), "explorer", "raised". */
+    const order: string[] = [];
     const d: RevealDeps = {
       here: { platform: "win32", wsl: false, envDistro: null },
       lookup: async () => {
@@ -301,15 +303,25 @@ describe("reveal on Windows, with nothing started", () => {
       },
       spawn: (argv, options) => {
         started.push({ argv, verbatim: options.verbatim, windowsHide: options.windowsHide });
+        order.push("explorer");
         return { exited: new Promise(() => undefined), stderr: null };
       },
+      raise: () => {
+        order.push("noted");
+        return {
+          opened: async () => {
+            order.push("raised");
+            return "raised (alt key)";
+          },
+        };
+      },
     };
-    return { d, started };
+    return { d, started, order };
   }
 
   test("each case starts Explorer with its command line, at once, wsl.exe never asked", async () => {
     const lookups: string[] = [];
-    const { d, started } = deps(
+    const { d, started, order } = deps(
       {
         "C:\\Program Files": "folder",
         [IMAGE]: "file",
@@ -333,6 +345,57 @@ describe("reveal on Windows, with nothing started", () => {
       "\\\\wsl.localhost\\Ubuntu-20.04\\home\\jimmy\\src",
       "C:\\",
     ]);
+    // Explorer's windows are noted before each start, and the new one raised after.
+    expect(order).toEqual(Array(4).fill(["noted", "explorer", "raised"]).flat());
+  });
+
+  test("a raise that cannot start, fails, throws or never ends never fails the reveal", async () => {
+    const warn = console.warn;
+    const warned: string[] = [];
+    console.warn = (text: string) => warned.push(text);
+    try {
+      const raises: RevealDeps["raise"][] = [
+        () => {
+          throw new Error("Windows' user32 is only on Windows.");
+        },
+        () => ({ opened: async () => "not raised: Windows kept the foreground where it was" }),
+        () => ({ opened: () => Promise.reject(new Error("FFI call failed")) }),
+        () => ({
+          opened: () => {
+            throw new Error("thrown at once");
+          },
+        }),
+        () => ({ opened: () => new Promise<string>(() => undefined) }),
+      ];
+      for (const raise of raises) {
+        const { d, started } = deps({ "C:\\Program Files": "folder" }, []);
+        const begun = Date.now();
+        await reveal(REAL, "C:\\Program Files", { ...d, raise });
+        expect(Date.now() - begun).toBeLessThan(500);
+        expect(started.length).toBe(1);
+      }
+      await Bun.sleep(0);
+      expect(warned).toEqual([
+        "Explorer's window is not brought to the front: Windows' user32 is only on Windows.",
+        "Explorer's window for C:\\Program Files: not raised: Windows kept the foreground where it was",
+        "Explorer's window for C:\\Program Files: not raised: FFI call failed",
+        "Explorer's window for C:\\Program Files: not raised: thrown at once",
+      ]);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  test("no raise is begun when Explorer cannot be started", async () => {
+    const { d, order } = deps({ "C:\\Program Files": "folder" }, []);
+    const broken: RevealDeps = {
+      ...d,
+      spawn: () => {
+        throw new Error("ENOENT");
+      },
+    };
+    await expect(reveal(REAL, "C:\\Program Files", broken)).rejects.toThrow("ENOENT");
+    expect(order).toEqual(["noted"]);
   });
 
   test("a WSL share that does not answer fails in seconds, with why", async () => {
@@ -362,6 +425,30 @@ describe("reveal on Windows, with nothing started", () => {
     await expect(reveal(REAL, "C:\\Program Files", broken)).rejects.toThrow(
       "could not be started: ENOENT",
     );
+  });
+});
+
+describe("off Windows", () => {
+  test("no raise of Explorer's window is begun", async () => {
+    for (const here of [
+      { platform: "linux" as const, wsl: true, envDistro: "Ubuntu-20.04" },
+      { platform: "darwin" as const, wsl: false, envDistro: null },
+      { platform: "linux" as const, wsl: false, envDistro: null },
+    ]) {
+      let begun = 0;
+      const d: RevealDeps = {
+        here,
+        lookup: async () => ({ why: "unused" }),
+        kind: async () => "folder",
+        spawn: () => ({ exited: Promise.resolve(0), stderr: null }),
+        raise: () => {
+          begun += 1;
+          return { opened: async () => "raised (alt key)" };
+        },
+      };
+      await reveal(scan(["/home/jimmy/src"]), "/home/jimmy/src", d);
+      expect(begun).toBe(0);
+    }
   });
 });
 
